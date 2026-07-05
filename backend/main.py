@@ -14,7 +14,7 @@ NNP 추론 서빙 API (FastAPI) — 학습된 모델 연결 버전
 실행 (AWS EC2):
     pip install -r requirements.txt          # torch는 CUDA 빌드로 별도 설치
     uvicorn main:app --host 0.0.0.0 --port 8000
-    # model/checkpoint_best.pt 가 있어야 함(없으면 /health 가 model_not_loaded).
+    # model/checkpoints/checkpoint_best.pt 가 있어야 함(없으면 /health 가 model_not_loaded).
 """
 
 from __future__ import annotations
@@ -172,7 +172,7 @@ async def health() -> dict:
 @app.post("/predict", response_model=PredictResponse)
 async def predict(req: PredictRequest) -> PredictResponse:
     if _ckpt is None:
-        raise HTTPException(503, "모델이 로드되지 않음 (model/checkpoint_best.pt 확인)")
+        raise HTTPException(503, "모델이 로드되지 않음 (model/checkpoints/checkpoint_best.pt 확인)")
     async with gpu_sem:               # GPU 동시 추론 4개로 제한
         return await run_in_threadpool(run_inference, req)
 
@@ -180,6 +180,6 @@ async def predict(req: PredictRequest) -> PredictResponse:
 @app.post("/step", response_model=StepResponse)
 async def step(req: StepRequest) -> StepResponse:
     if _ckpt is None:
-        raise HTTPException(503, "모델이 로드되지 않음 (model/checkpoint_best.pt 확인)")
+        raise HTTPException(503, "모델이 로드되지 않음 (model/checkpoints/checkpoint_best.pt 확인)")
     async with gpu_sem:
         return await run_in_threadpool(run_step, req)

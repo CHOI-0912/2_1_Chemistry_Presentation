@@ -29,7 +29,7 @@ from predict_forces import load_model, predict_energy_forces
   - ⚠️ **원자번호**를 넣는다(원소 기호 아님, 모델 내부 종 인덱스 0~3도 아님). 함수가 내부에서 종 인덱스로 변환.
   - ⚠️ **H/C/N/O 외 원소 금지.** 모델이 이 4종만 학습 — F/P/S/Cl 등 넣으면 안 됨.
 - `R` : 좌표(Å). shape `(n,3)` 또는 `(b,n,3)`. float.
-- `ckpt` : 생략 시 같은 폴더의 `checkpoint_best.pt`를 자동 로드. **반복 호출이면 `ckpt = load_model()` 결과(튜플)를 넘겨 재로딩 방지**(서버는 기동 시 1회 로드해 재사용).
+- `ckpt` : 생략 시 `model/checkpoints/checkpoint_best.pt`를 자동 로드. **반복 호출이면 `ckpt = load_model()` 결과(튜플)를 넘겨 재로딩 방지**(서버는 기동 시 1회 로드해 재사용).
 - **반환:**
   - 단일 입력 → `{"energy_hartree": float, "forces": np.ndarray (n,3)}`
   - 배치 입력 → `{"energy_hartree": np.ndarray (b,), "forces": np.ndarray (b,n,3)}`
@@ -56,7 +56,7 @@ from predict_forces import load_model, predict_energy_forces
 
 ## 3. 체크포인트
 
-- 파일: **`checkpoint_best.pt`** (`train.py` 산출물). `predict_forces.py`와 **같은 폴더**에 둘 것(아니면 `predict_forces.CKPT` 경로 수정).
+- 파일: **`model/checkpoints/checkpoint_best.pt`** (`train.py` 산출물). 기존 위치 `model/checkpoint_best.pt`도 fallback으로 지원.
 - 내부: `model_state` + `config(dim/rel_dim/num_atoms)` + `energy_ref`(원소 기준에너지) + `target_std`. `load_model()`이 모두 복원하고, 예측 총에너지 = `out*std + counts@energy_ref`로 역정규화.
 - ⚠️ torch 2.6+에서 **`weights_only=False`** 필요(energy_ref가 numpy 배열). `load_model()`에 이미 반영됨.
 - **`backend/main.py`의 `MODEL_PATH="model.pt"` / `_PlaceholderNNP`는 쓰지 말고 `predict_forces.load_model()`로 교체.**

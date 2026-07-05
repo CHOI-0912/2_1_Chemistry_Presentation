@@ -20,7 +20,10 @@ import torch
 from preprocess import to_species_index
 from model import Chemical_Model
 
-CKPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "checkpoint_best.pt")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CHECKPOINT_DIR = os.path.join(BASE_DIR, "checkpoints")
+CKPT = os.path.join(CHECKPOINT_DIR, "checkpoint_best.pt")
+LEGACY_CKPT = os.path.join(BASE_DIR, "checkpoint_best.pt")
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 HARTREE2KCAL = 627.5094740631
 NUM_SPECIES = 4
@@ -28,10 +31,12 @@ NUM_SPECIES = 4
 
 def load_model(ckpt_path=CKPT):
     """train.py가 저장한 체크포인트에서 모델 + 역정규화 상수(E_ref, std)를 복원."""
+    if not os.path.exists(ckpt_path) and ckpt_path == CKPT and os.path.exists(LEGACY_CKPT):
+        ckpt_path = LEGACY_CKPT
     if not os.path.exists(ckpt_path):
         raise FileNotFoundError(
             f"체크포인트가 없음: {ckpt_path}\n"
-            f"먼저 train.py로 학습해 checkpoint_best.pt를 만드세요.")
+            f"먼저 train.py로 학습해 checkpoints/checkpoint_best.pt를 만드세요.")
     # weights_only=False: 우리가 직접 저장한 체크포인트(신뢰 가능)이고 energy_ref가 numpy 배열이라 필요
     ck = torch.load(ckpt_path, map_location=DEVICE, weights_only=False)
     model = Chemical_Model(**ck["config"]).to(DEVICE)

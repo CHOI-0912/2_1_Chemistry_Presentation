@@ -32,7 +32,8 @@ VAL_RATIO = 0.1
 SEED = 42
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-CKPT_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CKPT_DIR = os.path.join(BASE_DIR, "checkpoints")
 HARTREE2KCAL = 627.5094740631
 
 
@@ -80,6 +81,7 @@ def main():
     random.seed(SEED)
     np.random.seed(SEED)
     torch.manual_seed(SEED)
+    os.makedirs(CKPT_DIR, exist_ok=True)
 
     by_na = load_grouped()
     total = sum(d["e"].shape[0] for d in by_na.values())
@@ -176,7 +178,7 @@ def main():
     # --- 마지막 가중치 저장 ---
     save_ckpt(os.path.join(CKPT_DIR, "checkpoint_last.pt"),
               model, ref_coef, target_std, EPOCHS, val_mae)
-    print(f"학습 완료. best val MAE = {best_val:.5f} Ha -> checkpoint_best.pt")
+    print(f"학습 완료. best val MAE = {best_val:.5f} Ha -> checkpoints/checkpoint_best.pt")
 
 
 if __name__ == "__main__":

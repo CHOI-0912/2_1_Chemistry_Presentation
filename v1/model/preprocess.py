@@ -12,7 +12,10 @@ import numpy as np
 # Windows 콘솔(cp949)에서 한글이 깨지지 않도록 UTF-8 출력
 sys.stdout.reconfigure(encoding="utf-8")
 
-PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ani1x-release.h5")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_PATH = os.path.join(BASE_DIR, "..", "..", "data", "ani1x-release.h5")  # 저장소 루트 data/
+LEGACY_DATA_PATH = os.path.join(BASE_DIR, "data", "ani1x-release.h5")
+PATH = DATA_PATH if os.path.exists(DATA_PATH) else LEGACY_DATA_PATH
 
 # 필요한 feature만
 KEYS = ["atomic_numbers", "coordinates", "ccsd(t)_cbs.energy"]
@@ -73,7 +76,7 @@ if __name__ == "__main__":
     #  - mean/std/min/max : 스트리밍으로 정확히 누적
     #  - 분위수(Q..)      : 균일 표본추출(subsample) 후 근사
     rng = np.random.default_rng(0)
-    TARGET = 5_000_000  # 분위수용 표본 목표 개수
+    TARGET = 5_000  # 분위수용 표본 목표 개수
 
     # 1) 메타데이터(shape)만 읽어 전체 거리 개수 -> 표본 확률 p
     total_pairs = 0

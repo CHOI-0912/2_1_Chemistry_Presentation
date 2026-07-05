@@ -26,3 +26,5 @@ wandb/
 .DS_Store
 .idea/
 .vscode/
+# 서드파티 클론 저장소 (자체 .git 보유)
+data/ANI1x_datasets/

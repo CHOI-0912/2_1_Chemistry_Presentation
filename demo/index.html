@@ -61,7 +61,7 @@
     position:absolute; width:34px; height:34px; border-radius:50%;
     transform:translate(-50%,-50%); display:flex; align-items:center; justify-content:center;
     font-weight:800; font-size:13px; border:2px solid rgba(0,0,0,.18);
-    box-shadow:0 2px 6px rgba(0,0,0,.18); transition:left .16s linear, top .16s linear;
+    box-shadow:0 2px 6px rgba(0,0,0,.18); transition:left .06s linear, top .06s linear;
     cursor:grab;
   }
 
@@ -121,10 +121,13 @@
 
 <script>
   // ===================================================================
-  // 백엔드 연결: EC2 준비되면 아래 주소만 채우면 /step 을 호출한다.
-  //   ⚠️ 이 페이지는 https(github.io)이므로 API도 https 여야 브라우저가 막지 않음.
+  // 백엔드 연결: EC2 모델 서버(/step) 호출.
+  //   ⚠️ http라서 https(github.io)에서는 mixed-content로 막힘 →
+  //      로컬 http 데모(http://localhost:8000/demo/)에서만 모델이 붙는다.
+  //      비우면("") 로컬 무작위로만 동작. EC2 재시작 시 IP가 바뀌면 여기 갱신.
   // ===================================================================
-  const API_BASE = ""; // 예) "https://api.example.com"  (비우면 로컬 계산으로 동작)
+  const API_BASE = "http://43.202.52.135:8000";
+  const SCALE = 45;   // px per Å — 화면 좌표 ↔ 모델 좌표(옹스트롬) 변환
 
   // CPK 색상(원소별)
   const ELEMENTS = {
@@ -132,7 +135,7 @@
     N: {c:"#3050f8", t:"#fff"},  O: {c:"#ff2d2d", t:"#fff"},
   };
   const DRIFT  = 5;      // 한 스텝당 무작위 이동량(px) — 작을수록 느림
-  const TICK   = 180;    // 스텝 간격(ms)
+  const TICK   = 60;     // 스텝 간격(ms)
   const R      = 20;     // 원자 반경(경계 클램프용)
 
   const stage = document.getElementById("stage");
@@ -222,16 +225,27 @@
   async function computeStep() {
     if (API_BASE) {
       try {
-        const body = { atoms: atoms.map((a) => ({ element: a.el, x: a.x, y: a.y, z: 0 })), dt: 0.08 };
+        // 화면(px) → 모델(Å): 캔버스 중심을 원점으로 변환
+        const cx = stage.clientWidth / 2, cy = stage.clientHeight / 2;
+        const body = {
+          atoms: atoms.map((a) => ({
+            element: a.el, x: (a.x - cx) / SCALE, y: (a.y - cy) / SCALE, z: 0,
+          })),
+          dt: 10.0,  // 스텝당 이동량(백엔드 ±0.1Å 클립을 항상 포화) — 최대
+        };
         const r = await fetch(API_BASE.replace(/\/$/, "") + "/step", {
           method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
         });
         if (!r.ok) throw new Error("HTTP " + r.status);
         const j = await r.json();
-        setMode("live", "EC2 /step");
-        return { next: j.atoms.map((p) => ({ x: p[0], y: p[1] })), energy: j.energy };
+        setMode("live", "EC2 모델 /step");
+        // 모델(Å) → 화면(px) 역변환
+        return {
+          next: j.atoms.map((p) => ({ x: cx + p[0] * SCALE, y: cy + p[1] * SCALE })),
+          energy: j.energy,
+        };
       } catch (e) {
-        setMode("err", "연결 실패 → 로컬 계산");
+        setMode("err", "연결 실패 → 로컬 무작위");
         return localStep();
       }
     }
@@ -272,7 +286,7 @@
   function updateHud(energy) {
     document.getElementById("hudStep").textContent = stepCount;
     document.getElementById("hudN").textContent = atoms.length;
-    if (energy !== undefined) document.getElementById("hudEnergy").textContent = energy.toFixed(1);
+    if (energy !== undefined) document.getElementById("hudEnergy").textContent = energy.toFixed(4) + " Ha";
   }
   function setStatus(msg) { document.getElementById("statusMsg").textContent = msg; }
   function setMode(kind, label) {
