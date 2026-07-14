@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>기존 방법론 — 분자 구조 예측</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/contrib/auto-render.min.js"></script>
+<style>
+  :root {
+    --bg: #fafaf8;
+    --card: #ffffff;
+    --ink: #1a1f2b;
+    --sub: #5a6472;
+    --line: #e5e2da;
+    --accent: #2f6fed;
+    --accent-soft: #eaf1fe;
+    --green: #1d8a4e;  --green-bg: #e7f5ec;
+    --amber: #b07708;  --amber-bg: #fdf3dd;
+    --red: #c0392b;    --red-bg: #fdeae7;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: "Pretendard", "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+    line-height: 1.75; font-size: 16.5px;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 48px 24px 96px; }
+
+  header.hero { margin-bottom: 40px; }
+  .kicker { color: var(--accent); font-weight: 700; letter-spacing: .12em; font-size: 13px; }
+  h1 { font-size: 34px; margin: 6px 0 10px; letter-spacing: -0.02em; }
+  .hero p { color: var(--sub); margin: 0; }
+
+  nav.toc {
+    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    padding: 18px 22px; margin-bottom: 44px; font-size: 15px;
+  }
+  nav.toc b { display: block; margin-bottom: 6px; font-size: 13px; color: var(--sub); letter-spacing: .08em; }
+  nav.toc a { color: var(--ink); text-decoration: none; display: inline-block; margin: 3px 14px 3px 0; }
+  nav.toc a:hover { color: var(--accent); }
+  nav.toc a::before { content: "› "; color: var(--accent); }
+
+  section { margin-bottom: 56px; }
+  h2 {
+    font-size: 24px; letter-spacing: -0.01em; margin: 0 0 4px;
+    padding-top: 12px; border-top: 3px solid var(--ink);
+  }
+  h2 .num { color: var(--accent); margin-right: 8px; }
+  h3 { font-size: 18.5px; margin: 34px 0 8px; }
+  p { margin: 10px 0; }
+
+
+  .eq { text-align: center; margin: 18px 0; font-size: 18px; }
+
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    padding: 20px 24px; margin: 18px 0;
+  }
+  .card.tint { background: var(--accent-soft); border-color: #cddcfa; }
+  .card h4 { margin: 0 0 8px; font-size: 16px; }
+
+  ol.steps { counter-reset: s; list-style: none; padding: 0; margin: 12px 0; }
+  ol.steps li {
+    counter-increment: s; position: relative; padding: 8px 0 8px 44px; margin: 0;
+    border-bottom: 1px dashed var(--line);
+  }
+  ol.steps li:last-child { border-bottom: none; }
+  ol.steps li::before {
+    content: counter(s); position: absolute; left: 0; top: 10px;
+    width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: #fff;
+    font-weight: 700; font-size: 14px; display: flex; align-items: center; justify-content: center;
+  }
+
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 15px; background: var(--card);
+          border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  th, td { padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--line); }
+  th { background: #f1efe9; font-size: 13.5px; letter-spacing: .03em; }
+  tr:last-child td { border-bottom: none; }
+  td:nth-child(2), td:nth-child(3), th:nth-child(2), th:nth-child(3) { white-space: nowrap; }
+
+  figure { margin: 22px 0; text-align: center; }
+  figcaption { font-size: 13.5px; color: var(--sub); margin-top: 8px; }
+  svg text { font-family: inherit; }
+
+  .refs { font-size: 15px; }
+  .refs li { margin: 8px 0; }
+
+  footer { color: var(--sub); font-size: 13px; border-top: 1px solid var(--line); padding-top: 16px; }
+  @media (max-width: 640px) { body { font-size: 15.5px; } h1 { font-size: 27px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <div class="kicker">화학 분자 구조 예측 AI</div>
+  <h1>기존 방법론</h1>
+  <p>하트리-폭(HF)을 중심으로 기존 양자화학 계산 방법을 살펴보고, 왜 AI 접근이 필요한지 정리한다.</p>
+</header>
+
+<nav class="toc">
+  <b>목차</b>
+  <a href="#s20">1. 문제 정의</a>
+  <a href="#s21">2. 하트리-폭 (HF)</a>
+  <a href="#s22">3. 그 외 방법들과 비교</a>
+  <a href="#s23">4. 한계, 그리고 AI를 쓰는 이유</a>
+  <a href="#refs">참고문헌</a>
+</nav>
+
+<!-- ==================== 1 ==================== -->
+<section id="s20">
+  <h2><span class="num">1.</span>문제 정의: 분자 구조 예측이란</h2>
+
+  <p>분자식, 그러니까 어떤 원자가 몇 개 있는지만 주어졌을 때 원자들이
+  3차원 공간에서 어떻게 배열되는지(결합 길이, 결합각, 이면각)를 알아내는 문제다.</p>
+
+  <p>물리적으로 보면 퍼텐셜 에너지 표면(PES) 위에서 에너지가 최소가 되는
+  점을 찾는 최적화 문제다. 원자 좌표를 \(\mathbf{R} = (\mathbf{r}_1, \dots, \mathbf{r}_N)\)이라 하면</p>
+
+  <div class="eq">\[ \mathbf{R}^* = \arg\min_{\mathbf{R}} E(\mathbf{R}) \]</div>
+
+  <p>결국 어떤 방법론이든 물어봐야 할 것은 에너지 함수 \(E(\mathbf{R})\)를 <b>어떻게 계산하느냐</b>이고,
+  방법론들의 차이도 대부분 여기서 갈린다. 최소점을 찾는 과정 자체는 대부분 그래디언트 기반 최적화로 비슷하다.</p>
+
+  <h3>이 프로젝트의 범위</h3>
+
+  <p>이 프로젝트는 H, C, N, O로 구성된 아주 간단한 분자만 다룬다.
+  H₂O, NH₃, CH₄, CO₂, HCN, H₂CO 같은 원자 2~5개 규모다. 유기 분자 대부분이 이 네 원소로
+  이루어져 있어서, 규모는 작아도 나름 대표성 있는 화학 공간이다.</p>
+
+  <p>작다고 만만한 건 아니다. H, C, N, O 각 1개라는 같은 조성으로도
+  HNCO(가장 안정), HOCN, HCNO, HONC 네 가지 이성질체가 존재한다. 같은 분자식에 PES 국소 최소점이
+  여러 개인 상황이 원자 4개에서 벌써 나온다. 모델이 이런 다중 최소 문제를 감당할 수 있는지가
+  검증 포인트 중 하나다.</p>
+
+  <figure>
+    <svg viewBox="0 0 640 240" width="100%" style="max-width:640px" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="여러 국소 최소점을 가진 퍼텐셜 에너지 표면 단면도">
+      <!-- axes -->
+      <line x1="46" y1="16" x2="46" y2="200" stroke="#98a0ac" stroke-width="1.5"/>
+      <line x1="46" y1="200" x2="616" y2="200" stroke="#98a0ac" stroke-width="1.5"/>
+      <text x="20" y="110" font-size="13" fill="#5a6472" transform="rotate(-90 20 110)">에너지</text>
+      <text x="330" y="226" font-size="13" fill="#5a6472" text-anchor="middle">구조 좌표 (개형)</text>
+      <!-- PES curve: minima at HNCO(lowest), HOCN, HCNO, HONC -->
+      <path d="M 60 40
+               C 95 40, 105 160, 140 160
+               C 175 160, 180 60, 215 60
+               C 240 60, 245 118, 280 118
+               C 315 118, 320 55, 350 55
+               C 378 55, 385 88, 420 88
+               C 455 88, 460 48, 490 48
+               C 518 48, 525 74, 560 74
+               C 585 74, 595 36, 612 30"
+            fill="none" stroke="#2f6fed" stroke-width="3" stroke-linecap="round"/>
+      <!-- minima dots + labels -->
+      <circle cx="140" cy="160" r="5" fill="#1d8a4e"/>
+      <text x="140" y="182" font-size="13" text-anchor="middle" fill="#1d8a4e" font-weight="700">HNCO</text>
+      <circle cx="280" cy="118" r="5" fill="#c0392b"/>
+      <text x="280" y="140" font-size="13" text-anchor="middle" fill="#c0392b">HOCN</text>
+      <circle cx="420" cy="88" r="5" fill="#c0392b"/>
+      <text x="420" y="110" font-size="13" text-anchor="middle" fill="#c0392b">HCNO</text>
+      <circle cx="560" cy="74" r="5" fill="#c0392b"/>
+      <text x="560" y="96" font-size="13" text-anchor="middle" fill="#c0392b">HONC</text>
+      <text x="140" y="147" font-size="11.5" text-anchor="middle" fill="#5a6472">전역 최소</text>
+    </svg>
+    <figcaption>같은 [H,C,N,O] 조성의 PES 단면 개형. 국소 최소점 하나하나가 서로 다른 이성질체에 해당한다. (정성적 그림)</figcaption>
+  </figure>
+</section>
+
+<!-- ==================== 2 ==================== -->
+<section id="s21">
+  <h2><span class="num">2.</span>하트리-폭 (Hartree-Fock, HF) 방법</h2>
+
+  <p>양자화학 계산의 뿌리에 해당하는 방법이라 이것만 제대로 짚고 넘어간다.
+  뒤에 나오는 방법들은 전부 HF의 한계를 보완하거나 우회하는 것들이다.</p>
+
+  <h3>2.1 출발점: 슈뢰딩거 방정식과 보른-오펜하이머 근사</h3>
+
+  <p>분자의 에너지는 시간 무관 슈뢰딩거 방정식
+  \(\hat{H}\Psi = E\Psi\)로 결정되지만, 다전자 분자에서는 이걸 해석적으로 풀 수 없다.
+  전자들이 서로 밀어내면서 얽혀 있기 때문이다.</p>
+
+  <p>그래서 먼저 <b>보른-오펜하이머 근사</b>를 쓴다. 핵이 전자보다 훨씬 무겁기 때문에
+  (양성자와 전자의 질량비가 약 1836) 핵을 고정해 놓고 전자 문제만 푸는 것이다.
+  "핵 배치 \(\mathbf{R}\)마다 전자 에너지 \(E(\mathbf{R})\)가 하나 정해진다"는
+  PES 개념 자체가 이 근사 덕분에 성립한다.</p>
+
+  <h3>2.2 핵심 아이디어: 평균장 근사</h3>
+
+  <p>그래도 전자가 여러 개면 여전히 못 푼다. HF의 발상은 이렇다.</p>
+
+  <div class="card tint">
+    "전자 하나하나가 다른 전자들을 일일이 신경 쓰는 대신, 나머지 전자들이 만드는
+    <b>평균적인 전기장</b> 속에서 혼자 움직인다고 치자."
+  </div>
+
+  <p>여러 명이 뒤엉킨 문제를 '한 명 + 배경'짜리 문제 여러 개로 쪼개는 것이다.</p>
+
+  <p>수학적으로는 다전자 파동함수를 슬레이터 행렬식 하나로 근사하는 것에
+  해당한다. 행렬식 꼴을 쓰는 이유는 전자가 페르미온이라 두 전자를 맞바꾸면 파동함수 부호가
+  뒤집혀야 하는데(파울리 배타 원리), 행렬식이 이 반대칭성을 자동으로 보장해 주기 때문이다.</p>
+
+  <h3>2.3 실제 계산: 자기일관장(SCF) 반복</h3>
+
+  <p>문제가 하나 있다. 각 전자의 궤도를 구하려면 "나머지 전자들의
+  평균장"을 알아야 하는데, 그 평균장은 다시 전자들의 궤도로부터 만들어진다. 닭과 달걀 관계다.
+  그래서 반복법으로 푼다.</p>
+
+  <ol class="steps">
+    <li>궤도를 대충 추측해서 시작한다.</li>
+    <li>그 궤도들로 평균장(폭 연산자)을 만든다.</li>
+    <li>그 평균장 안에서 궤도 방정식을 다시 푼다.</li>
+    <li>새 궤도가 이전 궤도와 거의 같아질 때까지 2~3을 반복한다.</li>
+  </ol>
+
+  <p>들어간 궤도와 나온 궤도가 일치하는(자기일관적인) 상태에 도달하면 끝.
+  그래서 <b>자기일관장(Self-Consistent Field, SCF)</b> 방법이라 부른다.</p>
+</section>
+
+<!-- ==================== 3 ==================== -->
+<section id="s22">
+  <h2><span class="num">3.</span>그 외 방법들: 개요와 비교</h2>
+
+  <p>나머지는 아이디어만 간단히. HF는 평균장을 쓰는 탓에 전자들이
+  순간순간 서로를 피해 다니는 효과, 즉 <b>전자 상관</b>(electron correlation)을 놓친다.
+  이후 방법들의 공통 질문은 하나다. "이 놓친 부분을 어떻게 되찾을 것인가?"</p>
+
+  <div class="card">
+    <h4>Post-HF 계열 (MP2, CCSD(T) 등)</h4>
+    HF 결과 위에 보정을 쌓아서 상관 에너지를 회복한다. MP2는 섭동이론 2차 보정으로 가성비가 좋고,
+    CCSD(T)는 흔히 "황금 표준"이라 불릴 만큼 정확해서 실험값 검증용으로 쓰인다. 대신 비용이 살인적이다.
+  </div>
+
+  <div class="card">
+    <h4>밀도범함수 이론 (DFT)</h4>
+    아예 접근을 바꿔서, \(3N\)차원 파동함수 대신 3차원 전자 밀도 \(\rho(\mathbf{r})\)로 에너지를
+    계산한다(Hohenberg-Kohn 정리가 이게 원리적으로 가능함을 보장). 상관 효과는 교환-상관 범함수라는
+    근사 항에 뭉뚱그려 넣는다. 정확도 대비 비용이 좋아서 현재 실무에서 가장 널리 쓰인다.
+  </div>
+
+  <div class="card">
+    <h4>반경험적 방법 (PM7, xTB 등)</h4>
+    계산이 비싼 항들을 실험값이나 고수준 계산에 맞춘 파라미터로 대체한다.
+    빠르지만 파라미터화된 범위 밖에서는 신뢰도가 떨어진다.
+  </div>
+
+  <h3>누가 더 좋은가</h3>
+
+  <table>
+    <thead>
+      <tr><th>방법</th><th>정확도</th><th>비용(스케일링)</th><th>한줄평</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>반경험적 (PM7 등)</td><td>낮음</td><td>매우 저렴</td><td>초기 구조 잡기용</td></tr>
+      <tr><td>HF</td><td>낮음~중간</td><td>\(O(N^4)\)</td><td>출발점, 단독 사용은 드묾</td></tr>
+      <tr><td>DFT</td><td>중간~높음</td><td>\(O(N^3{\sim}N^4)\)</td><td>실무 표준, 범함수 선택이 관건</td></tr>
+      <tr><td>MP2</td><td>중간~높음</td><td>\(O(N^5)\)</td><td>post-HF 입문, 가성비</td></tr>
+      <tr><td>CCSD(T)</td><td>매우 높음</td><td>\(O(N^7)\)</td><td>황금 표준, 소분자만 가능</td></tr>
+    </tbody>
+  </table>
+
+  <p>요약하면 정확도와 비용은 거의 정직하게 비례한다. CCSD(T)에 큰 기저를
+  쓰면 HOCN 이성질체들의 상대 에너지도 실험 오차 수준으로 재현된다. 즉 "얼마나 정확할 수 있는가"는
+  이미 해결된 문제고, 진짜 문제는 "그 정확도를 감당 가능한 비용으로 낼 수 있는가"다.</p>
+</section>
+
+<!-- ==================== 4 ==================== -->
+<section id="s23">
+  <h2><span class="num">4.</span>기존 방법론의 공통 한계, 그리고 AI를 쓰려는 이유</h2>
+
+  <p><b>첫째, 비용 스케일링.</b> 정확한 방법일수록 \(O(N^5)\)에서 \(O(N^7)\)까지 치솟아서
+  분자가 조금만 커져도 계산이 사실상 불가능해진다.</p>
+
+  <p><b>둘째, 초기 구조 의존성.</b> 최적화는 시작점에서 가까운 국소 최소로 수렴하기 때문에,
+  HOCN처럼 이성질체가 여럿이면 전역 탐색을 따로 해야 한다.</p>
+
+  <p><b>셋째, 반복 비용.</b> 구조 최적화는 에너지와 힘 계산을 수십에서 수백 번 반복하는데,
+  그 한 스텝 한 스텝이 비싸다.</p>
+
+  <p><b>넷째, 전문가 의존성.</b> 방법, 기저, 범함수를 고르는 데 도메인 지식이 필요하다.</p>
+
+  <div class="card tint">
+    <h4>이 프로젝트의 아이디어</h4>
+    비싼 양자화학 계산 결과를 학습 데이터로 삼아 \(E(\mathbf{R})\)나 구조 자체를 신경망으로
+    근사하면, 정확도는 어느 정도 유지하면서 비용을 몇 자릿수 낮출 수 있지 않을까.
+  </div>
+</section>
+
+<!-- ==================== refs ==================== -->
+<section id="refs">
+  <h2>참고문헌</h2>
+  <ol class="refs">
+    <li>A. Szabo, N. S. Ostlund, <i>Modern Quantum Chemistry: Introduction to Advanced Electronic Structure Theory</i>, Dover (1996). — HF와 post-HF 전반</li>
+    <li>P. Hohenberg, W. Kohn, <i>Phys. Rev.</i> <b>136</b>, B864 (1964); W. Kohn, L. J. Sham, <i>Phys. Rev.</i> <b>140</b>, A1133 (1965). — DFT의 기초 논문</li>
+    <li>K. Raghavachari, G. W. Trucks, J. A. Pople, M. Head-Gordon, <i>Chem. Phys. Lett.</i> <b>157</b>, 479 (1989). — CCSD(T) 원 논문</li>
+    <li>M. S. Schuurman, S. R. Muir, W. D. Allen, H. F. Schaefer III, <i>J. Chem. Phys.</i> <b>120</b>, 11586 (2004). — [H,C,N,O] 이성질체 상대 에너지</li>
+  </ol>
+</section>
+
+<footer>화학 분자 구조 예측 AI — 개인 프로젝트 · 기존 방법론</footer>
+
+</div>
+<script>
+  document.addEventListener("DOMContentLoaded", function() {
+    renderMathInElement(document.body, {
+      delimiters: [
+        {left: "\\[", right: "\\]", display: true},
+        {left: "\\(", right: "\\)", display: false}
+      ]
+    });
+  });
+</script>
+</body>
+</html>
