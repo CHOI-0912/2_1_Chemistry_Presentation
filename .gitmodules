@@ -1,0 +1,3 @@
+[submodule "dftdata"]
+	path = dftdata
+	url = https://github.com/qsnake/dftdata.git

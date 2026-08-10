@@ -20,18 +20,9 @@ DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 ANI1X_H5 = DATA_DIR / "ani1x-release.h5"
 ANI2X_H5 = DATA_DIR / "ANI-2x-wB97X-631Gd.h5"
 QM9X_H5 = DATA_DIR / "qm9x.h5"
-TRANSITION1X_H5 = DATA_DIR / "Transition1x" / "transition1x.h5"
+TRANSITION1X_H5 = DATA_DIR / "Transition1x.h5"
 
 EV2HARTREE = 1.0 / 27.211386245988
-
-# QM9x / Transition1x 공식 로더의 원자별 참조 에너지 (eV).
-REFERENCE_ENERGIES_EV = {
-    1: -13.62222753701504,
-    6: -1029.4130839658328,
-    7: -1484.8710358098756,
-    8: -2041.8396277138045,
-    9: -2712.8213146878606,
-}
 
 _SYMBOLS = {
     1: "H", 5: "B", 6: "C", 7: "N", 8: "O", 9: "F",
@@ -139,9 +130,10 @@ def load_ani2x(h5path=ANI2X_H5, chunk=8192):
 
 
 def load_qm9x(h5path=QM9X_H5):
-    """QM9x (ωB97x/6-31G(d)). 원자화 에너지(atomization energy) + 힘, Hartree.
+    """QM9x (ωB97x/6-31G(d)). 총 에너지(total energy) + 힘, Hartree.
 
-    공식 로더와 동일하게 total energy에서 원자별 참조 에너지 합을 뺀다.
+    h5의 energy 키가 곧 총 에너지(eV)다. 공식 로더의 atomization_energy는
+    여기서 원자별 참조 에너지를 뺀 파생값인데, 그 변환은 하지 않는다.
     """
     _check_file(h5path, "QM9x h5 파일을 확인하세요.")
     with h5py.File(h5path, "r") as f:
@@ -151,15 +143,12 @@ def load_qm9x(h5path=QM9X_H5):
             energies = grp["energy"][()]
             forces = grp["forces"][()]
 
-            ref = sum(REFERENCE_ENERGIES_EV[int(z)] for z in numbers)
-
             for i in range(len(energies)):
-                atomization_ev = float(energies[i]) - ref
                 yield (
                     name,
                     positions[i],
                     numbers,
-                    atomization_ev * EV2HARTREE,
+                    float(energies[i]) * EV2HARTREE,
                     forces[i] * EV2HARTREE,
                 )
 
@@ -171,9 +160,6 @@ def load_transition1x(h5path=TRANSITION1X_H5, split="data"):
     그 아래 reactant / product / transition_state 서브그룹이 끝점을 담는다.
     각 그룹의 키는 positions, atomic_numbers, wB97x_6-31G(d).energy/.forces (eV).
     이름은 "{formula}/{rxn}" 형태로 준다.
-
-    주의: 현재 저장소에는 실제 데이터가 없다 (transition1x.h5 = 0바이트).
-    data/Transition1x/download_t1x.py 로 받아야 동작한다. v2/tradeoffs.md 참고.
     """
     if split not in ("data", "train", "val", "test"):
         raise ValueError("split은 'data', 'train', 'val', 'test' 중 하나여야 합니다.")

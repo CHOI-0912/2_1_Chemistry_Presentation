@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NNP 분자 완화 시뮬레이터 · v2</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#f4f3ee; --surface:#fff; --ink:#15171c; --soft:#5b616b;
+    --blue:#1f3bff; --coral:#ff5a36; --line:#e2ddd1;
+    --mono:"Space Mono",ui-monospace,monospace;
+    --shadow:0 1px 2px rgba(20,24,60,.05),0 10px 28px rgba(20,30,90,.07);
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; font-family:"Pretendard",system-ui,sans-serif; color:var(--ink);
+    background:var(--paper);
+    background-image:linear-gradient(rgba(31,59,255,.05) 1px,transparent 1px),
+                     linear-gradient(90deg,rgba(31,59,255,.05) 1px,transparent 1px);
+    background-size:38px 38px;
+  }
+  header{padding:22px 28px 6px; display:flex; align-items:baseline; gap:14px; flex-wrap:wrap}
+  header .kick{font-family:var(--mono); color:var(--blue); font-size:12px; letter-spacing:.18em; text-transform:uppercase}
+  header h1{font-size:26px; font-weight:800; margin:0; letter-spacing:-.02em}
+  header a{margin-left:auto; font-family:var(--mono); font-size:12px; color:var(--blue); text-decoration:none}
+  header a:hover{text-decoration:underline}
+  .sub{padding:0 28px 14px; color:var(--soft); font-size:14px}
+
+  main{display:grid; grid-template-columns:200px 1fr; gap:18px; padding:0 28px 28px; align-items:start}
+  .panel{background:var(--surface); border:1px solid var(--line); border-radius:16px; box-shadow:var(--shadow); padding:16px}
+  .panel h2{font-size:14px; margin:0 0 10px; font-weight:800}
+  .hint{font-size:12px; color:var(--soft); line-height:1.5}
+
+  /* 원소 팔레트 */
+  .palette{display:flex; flex-wrap:wrap; gap:8px; margin-bottom:12px}
+  .el-chip{
+    width:42px; height:42px; border-radius:50%; border:2px solid rgba(0,0,0,.12);
+    background:var(--c); color:var(--t,#fff); font-weight:800; font-size:15px; cursor:grab;
+    display:flex; align-items:center; justify-content:center; user-select:none;
+    box-shadow:var(--shadow); transition:transform .12s ease;
+  }
+  .el-chip:hover{transform:translateY(-2px)}
+  .el-chip.sel{outline:3px solid var(--blue); outline-offset:2px}
+
+  .presets{display:flex; flex-direction:column; gap:6px; margin-top:6px}
+  .presets button{
+    font-family:var(--mono); font-size:12px; text-align:left; border:1px solid var(--line);
+    background:var(--surface); border-radius:8px; padding:6px 10px; cursor:pointer; color:var(--ink);
+  }
+  .presets button:hover{border-color:var(--blue); color:var(--blue)}
+
+  /* 캔버스 */
+  .stage-wrap{display:flex; flex-direction:column; gap:12px}
+  #stage{
+    position:relative; width:100%; height:440px; border:1px dashed var(--line);
+    border-radius:14px; background:repeating-linear-gradient(0deg,transparent,transparent 21px,rgba(0,0,0,.025) 22px),
+                                  repeating-linear-gradient(90deg,transparent,transparent 21px,rgba(0,0,0,.025) 22px);
+    overflow:hidden;
+  }
+  #stage.empty::after{
+    content:"여기로 원소를 드래그하세요 (또는 팔레트 선택 후 클릭)";
+    position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    color:var(--soft); font-size:14px;
+  }
+  #bonds{position:absolute; inset:0; width:100%; height:100%; pointer-events:none}
+
+  /* 3D 모드: DOM 원자/결합선을 숨기고 캔버스만 보인다 */
+  #c3d{position:absolute; inset:0; width:100%; height:100%; display:none; touch-action:none; cursor:grab}
+  #stage.mode3d{background:none}
+  #stage.mode3d .atom,#stage.mode3d #bonds{display:none}
+  #stage.mode3d #c3d{display:block}
+  #stage.empty.mode3d::after{
+    content:"팔레트에서 원소를 고른 뒤 클릭해 배치하세요 · 드래그=회전, 휠=줌";
+    pointer-events:none;
+  }
+  .atom{
+    position:absolute; width:34px; height:34px; border-radius:50%;
+    transform:translate(-50%,-50%); display:flex; align-items:center; justify-content:center;
+    font-weight:800; font-size:13px; border:2px solid rgba(0,0,0,.18);
+    box-shadow:0 2px 6px rgba(0,0,0,.18); transition:left .06s linear, top .06s linear;
+    cursor:grab;
+  }
+
+  /* 컨트롤 */
+  .controls{display:flex; align-items:center; gap:10px; flex-wrap:wrap}
+  button.act{
+    font-family:var(--mono); font-weight:700; font-size:13px; color:#fff; border:none;
+    border-radius:999px; padding:9px 18px; cursor:pointer; box-shadow:var(--shadow);
+    transition:transform .12s ease, background .12s ease;
+  }
+  button.act:hover{transform:translateY(-2px)}
+  button.act:disabled{opacity:.45; cursor:not-allowed; transform:none}
+  .btn-start{background:var(--blue)}
+  .btn-stop{background:var(--coral)}
+  .btn-clear{background:#6b7280}
+  .btn-rand{background:#0e7a52}
+  /* 2D | 3D 세그먼트 토글 */
+  .seg{display:inline-flex; border:1px solid var(--line); border-radius:999px; overflow:hidden; background:var(--surface)}
+  .seg button{
+    font-family:var(--mono); font-weight:700; font-size:13px; border:none; background:transparent;
+    color:var(--soft); padding:8px 16px; cursor:pointer; transition:background .12s ease, color .12s ease;
+  }
+  .seg button:hover{color:var(--blue)}
+  .seg button.on{background:var(--blue); color:#fff}
+  .hud{display:flex; gap:18px; font-family:var(--mono); font-size:13px; color:var(--ink); margin-left:auto}
+  .hud b{color:var(--blue)}
+  .status{font-size:12px; color:var(--soft)}
+  .status .badge{font-family:var(--mono); padding:2px 8px; border-radius:999px; font-size:11px; font-weight:700}
+  .badge.demo{background:#e3f9ee; color:#0e7a52}
+  .badge.live{background:#e3f9ee; color:#0e7a52}
+  .badge.err{background:#fff0d6; color:#9a6b00}
+  .badge.load{background:#eceaf7; color:#4b3fb0}
+</style>
+</head>
+<body>
+  <header>
+    <span class="kick">Interactive · NNP · v2</span>
+    <h1>분자 완화 시뮬레이터</h1>
+    <a href="../../">← 발표(PPT)로</a>
+  </header>
+  <p class="sub">원소를 캔버스에 배치하고 <b>시작</b>을 누르면, 학습된 신경망 퍼텐셜(<span style="font-family:var(--mono)">v2/nnp.pt</span>)이
+  매 스텝 힘 <span style="font-family:var(--mono)">F = −∂E/∂r</span>을 계산해 분자를 에너지 최소 구조로 완화합니다. <b>브라우저에서 직접</b> 추론합니다.</p>
+
+  <main>
+    <!-- 왼쪽: 팔레트 + 프리셋 -->
+    <section class="panel">
+      <h2>원소 팔레트</h2>
+      <div class="palette" id="palette"></div>
+      <p class="hint">칩을 캔버스로 <b>드래그</b>하거나, 칩을 클릭해 선택한 뒤 캔버스를 클릭해 배치하세요. 시작 전에는 원자를 드래그로 옮길 수 있습니다.</p>
+      <p class="hint"><b>3D 모드</b>: 빈 공간 드래그=회전, 휠=줌. 원자 위 드래그=이동. 완화 중에도 돌려 볼 수 있습니다.
+      3D 전환 시 평면 배치는 살짝 흩뿌려집니다(완전 공면이면 평면 수직 방향 힘이 0이라 평면을 못 벗어남).</p>
+      <h2 style="margin-top:16px">예시 분자</h2>
+      <div class="presets" id="presets"></div>
+    </section>
+
+    <!-- 오른쪽: 캔버스 + 컨트롤 -->
+    <section class="panel stage-wrap">
+      <div id="stage" class="empty"><svg id="bonds"></svg><canvas id="c3d"></canvas></div>
+      <div class="controls">
+        <div class="seg" id="modeSeg">
+          <button type="button" data-mode="2d" class="on">2D</button>
+          <button type="button" data-mode="3d">3D</button>
+        </div>
+        <button class="act btn-start" id="btnStart">▶ 시작</button>
+        <button class="act btn-stop" id="btnStop" disabled>■ 정지</button>
+        <button class="act btn-rand" id="btnRandom" style="display:none">무작위 배치</button>
+        <button class="act btn-clear" id="btnClear">비우기</button>
+        <div class="hud">
+          <span>step <b id="hudStep">0</b></span>
+          <span>energy <b id="hudEnergy">–</b></span>
+          <span>|F|max <b id="hudForce">–</b></span>
+          <span>atoms <b id="hudN">0</b></span>
+        </div>
+      </div>
+      <div class="status">추론: <span class="badge load" id="modeBadge">모델 로딩…</span> <span id="statusMsg"></span></div>
+    </section>
+  </main>
+
+<script src="nnp.js"></script>
+<script src="view3d.js"></script>
+<script>
+  // ===================================================================
+  // 추론 위치 설정
+  //  - API_BASE 를 비워두면(""), 브라우저에서 직접 nnp.pt(weights.json)로 추론한다.  ← 현재 기본
+  //  - 나중에 AWS 백엔드를 붙일 때 여기에 서버 URL을 넣으면 /step 을 우선 호출하고,
+  //    연결이 안 되면 자동으로 브라우저 모델로 폴백한다. (백엔드 구현은 TODO)
+  //    서버 계약(v1과 동일): POST /step { atoms:[{element,x,y,z}], dt } → { atoms:[[x,y,z]], energy }
+  // ===================================================================
+  const API_BASE = "";     // 예: "http://<ec2-ip>:8000" — 지금은 미구현이라 비워 둠
+
+  const SCALE = 45;        // px per Å (2D 화면 ↔ 모델 좌표)
+  const TICK  = 60;        // 스텝 간격(ms)
+  const R     = 20;        // 원자 반경(px, 2D 경계 클램프)
+  const STEP_LR   = 1.5;   // 최속강하 학습률 (Å per Ha/Å)
+  const STEP_CLIP = 0.04;  // 스텝당 최대 이동(Å) — 발산 방지
+  const CONV_WIN  = 16;    // 에너지 평탄 판정 창(스텝)
+  const CONV_TOL  = 3e-4;  // 창 내 에너지 변동이 이보다 작으면 완화 완료로 간주(Ha)
+  const BOND_MAX  = 1.8;   // 결합선 판정 거리(Å) — 2D/3D 공통, 화학 판정이 아니라 시각 표시
+
+  // --- 3D 모드 상수 ---
+  const PLANE_TOL     = 0.01; // z 폭이 이보다 작으면 "사실상 공면"으로 본다(Å)
+  const SCATTER_PLANE = 0.2;  // 공면 배치를 3D로 가져올 때 z 흩뿌림 진폭(Å)
+  const SCATTER_PLACE = 0.15; // 3D에서 원자 하나를 놓을 때 깊이 방향 오프셋(Å)
+  const RAND_RADIUS   = 2.0;  // "무작위 배치" 구 반경(Å)
+  const RAND_MIN_D    = 0.7;  // 무작위 배치 시 원자 간 최소 거리(Å)
+  const RAND_TRIES    = 60;   // 최소 거리 만족 재시도 횟수
+
+  // CPK 색상 + 원자번호
+  // 지원 원소 = 모델이 학습한 QM9x 5종(H·C·N·O·F). 임베딩 MAX_Z=10 이라 그 외 원소는 넣을 수 없음.
+  const ELEMENTS = {
+    H: {c:"#e9e9ee", t:"#333333", z:1},
+    C: {c:"#33363b", t:"#ffffff", z:6},
+    N: {c:"#3050f8", t:"#ffffff", z:7},
+    O: {c:"#ff2d2d", t:"#ffffff", z:8},
+    F: {c:"#90e050", t:"#20340a", z:9},
+  };
+  const PRESETS = {
+    "H₂O (물)":     [["O",0,0],["H",0.96,0.3],["H",-0.4,0.9]],
+    "NH₃ (암모니아)":[["N",0,0],["H",1.0,0.1],["H",-0.5,0.9],["H",-0.5,-0.9]],
+    "CH₄ (메테인)": [["C",0,0],["H",1.0,0.0],["H",-0.5,0.9],["H",-0.5,-0.9],["H",0.0,-1.0]],
+    "HCN (사이안화수소)":[["H",-1.3,0.2],["C",-0.1,-0.1],["N",1.1,0.1]],
+    "CH₂F₂ (다이플루오로메테인)":[["C",0,0],["F",1.1,0.5],["F",-1.1,0.5],["H",0.6,-0.9],["H",-0.6,-0.9]],
+  };
+
+  const stage    = document.getElementById("stage");
+  const palette  = document.getElementById("palette");
+  const bondsSvg = document.getElementById("bonds");
+  const canvas3d = document.getElementById("c3d");
+  const modeSeg  = document.getElementById("modeSeg");
+  const btnRandom = document.getElementById("btnRandom");
+
+  // 원자 상태는 world 좌표 [x,y,z] Å 하나로 통일한다. 2D/3D 모드가 같은 배열을 공유하고,
+  // 2D는 z를 화면에 안 그릴 뿐 값은 그대로 보존한다(2D에서 배치한 원자는 z=0).
+  let atoms = [];        // {el, p:[x,y,z], dom}
+  let selectedEl = null;
+  let viewMode = "2d";   // "2d" | "3d"
+  let running = false, stepCount = 0, timer = null;
+  let model = null, eHistory = [];
+  let remoteOK = null;   // null=미시도, true/false=AWS 연결 결과
+
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  const dist3 = (a, b) => Math.hypot(a[0]-b[0], a[1]-b[1], a[2]-b[2]);
+
+  // --- 모델 로드 ---
+  fetch("weights.json")
+    .then((r) => { if (!r.ok) throw new Error("weights.json " + r.status); return r.json(); })
+    .then((w) => {
+      model = new NNP.SimpleNNP(w);
+      setBadge("demo", "브라우저에서 nnp.pt 추론 준비 완료");
+    })
+    .catch((e) => setBadge("err", "모델 로드 실패: " + e.message + " (정적 서버로 여세요)"));
+
+  // --- 3D 뷰어 ---
+  const viewer = View3D.create(canvas3d, {
+    getAtoms: () => atoms,
+    colors: ELEMENTS,
+    canPlace: () => !!selectedEl && !running,
+    canDragAtoms: () => !running,
+    onPlace: (p) => addAtom(selectedEl, offsetAlongView(p, SCATTER_PLACE)),
+    onAtomDrag: (i, p) => { atoms[i].p = p; },
+  });
+
+  // 카메라 정면(깊이) 방향으로 ±amp 만큼 흔든다 — 새 원자가 클릭 평면에 딱 붙지 않게
+  function offsetAlongView(p, amp) {
+    const f = viewer.getForward();
+    const d = (Math.random() * 2 - 1) * amp;
+    return [p[0] + f[0]*d, p[1] + f[1]*d, p[2] + f[2]*d];
+  }
+
+  // --- 팔레트 ---
+  for (const [sym, sty] of Object.entries(ELEMENTS)) {
+    const chip = document.createElement("button");
+    chip.className = "el-chip"; chip.textContent = sym;
+    chip.draggable = true;
+    chip.style.setProperty("--c", sty.c); chip.style.setProperty("--t", sty.t);
+    chip.dataset.el = sym;
+    chip.addEventListener("dragstart", (e) => e.dataTransfer.setData("text/plain", sym));
+    chip.addEventListener("click", () => {
+      selectedEl = (selectedEl === sym) ? null : sym;
+      [...palette.children].forEach((c) => c.classList.toggle("sel", c.dataset.el === selectedEl));
+    });
+    palette.appendChild(chip);
+  }
+
+  // --- 프리셋 ---
+  const presetsBox = document.getElementById("presets");
+  for (const [name, spec] of Object.entries(PRESETS)) {
+    const b = document.createElement("button");
+    b.textContent = name;
+    b.addEventListener("click", () => loadPreset(spec));
+    presetsBox.appendChild(b);
+  }
+  function loadPreset(spec) {
+    clearAll();
+    for (const [el, ax, ay] of spec) addAtom(el, [ax, ay, 0]);
+    if (viewMode === "3d") { scatterIfCoplanar(SCATTER_PLANE); viewer.frameAll(); }
+  }
+
+  // --- 2D 좌표 변환 (캔버스 중심 = 원점) ---
+  const stageCenter = () => [stage.clientWidth / 2, stage.clientHeight / 2];
+  function worldToPx(p) { const c = stageCenter(); return [c[0] + p[0]*SCALE, c[1] + p[1]*SCALE]; }
+  function pxToWorld(px, py, z) { const c = stageCenter(); return [(px-c[0])/SCALE, (py-c[1])/SCALE, z || 0]; }
+  // 2D 화면 밖으로 나가지 않게 world x,y 를 제한(z는 건드리지 않음)
+  function clampWorld2D(p) {
+    const c = stageCenter();
+    p[0] = clamp(p[0], (R - c[0]) / SCALE, (stage.clientWidth - R - c[0]) / SCALE);
+    p[1] = clamp(p[1], (R - c[1]) / SCALE, (stage.clientHeight - R - c[1]) / SCALE);
+    return p;
+  }
+
+  // --- 캔버스 드롭/클릭으로 원자 추가 ---
+  stage.addEventListener("dragover", (e) => e.preventDefault());
+  stage.addEventListener("drop", (e) => {
+    e.preventDefault();
+    const el = e.dataTransfer.getData("text/plain");
+    if (!ELEMENTS[el]) return;
+    const r = stage.getBoundingClientRect();
+    const x = e.clientX - r.left, y = e.clientY - r.top;
+    if (viewMode === "3d") addAtom(el, offsetAlongView(viewer.screenToTargetPlane(x, y), SCATTER_PLACE));
+    else addAtom(el, pxToWorld(x, y, 0));
+  });
+  // 3D 배치는 캔버스가 pointer 이벤트로 직접 처리한다(회전/드래그와 구분해야 하므로)
+  stage.addEventListener("click", (e) => {
+    if (viewMode !== "2d" || !selectedEl) return;
+    if (e.target !== stage && e.target !== bondsSvg) return;
+    const r = stage.getBoundingClientRect();
+    addAtom(selectedEl, pxToWorld(e.clientX - r.left, e.clientY - r.top, 0));
+  });
+
+  function addAtom(el, p) {
+    if (!ELEMENTS[el]) return;
+    const dom = document.createElement("div");
+    dom.className = "atom"; dom.textContent = el;
+    dom.style.background = ELEMENTS[el].c; dom.style.color = ELEMENTS[el].t;
+    stage.appendChild(dom);
+    const atom = { el, p: p.slice(), dom };
+    if (viewMode === "2d") clampWorld2D(atom.p);
+    atoms.push(atom);
+    enableDrag2D(atom);
+    stage.classList.remove("empty");
+    render(); updateHud();
+  }
+
+  // 2D 모드에서 DOM 원자를 끌어 옮기기(z는 유지)
+  function enableDrag2D(atom) {
+    atom.dom.addEventListener("pointerdown", (e) => {
+      if (running || viewMode !== "2d") return;
+      e.preventDefault(); atom.dom.setPointerCapture(e.pointerId);
+      const move = (ev) => {
+        const r = stage.getBoundingClientRect();
+        atom.p = clampWorld2D(pxToWorld(ev.clientX - r.left, ev.clientY - r.top, atom.p[2]));
+        render2D();
+      };
+      const up = () => {
+        atom.dom.releasePointerCapture(e.pointerId);
+        atom.dom.removeEventListener("pointermove", move);
+        atom.dom.removeEventListener("pointerup", up);
+      };
+      atom.dom.addEventListener("pointermove", move);
+      atom.dom.addEventListener("pointerup", up);
+    });
+  }
+
+  // --- 모드 전환 ---
+  function setViewMode(m) {
+    if (m === viewMode) return;
+    viewMode = m;
+    [...modeSeg.children].forEach((b) => b.classList.toggle("on", b.dataset.mode === m));
+    stage.classList.toggle("mode3d", m === "3d");
+    btnRandom.style.display = (m === "3d") ? "" : "none";
+    viewer.setEnabled(m === "3d");
+    if (m === "3d") {
+      const scattered = scatterIfCoplanar(SCATTER_PLANE);
+      viewer.frameAll();
+      setStatus(scattered
+        ? "3D 모드 — 평면 배치라 z를 살짝 흩뿌렸습니다(완전 공면이면 평면 수직 힘이 0이라 못 벗어남)."
+        : "3D 모드 — 드래그=회전, 휠=줌, 원자 드래그=이동.");
+    } else {
+      atoms.forEach((a) => clampWorld2D(a.p));
+      render2D();
+      setStatus("2D 모드 — z는 그대로 두고 xy 평면 안에서만 완화합니다.");
+    }
+  }
+
+  // 모든 원자가 사실상 한 평면(z 폭 < PLANE_TOL) 위면 z를 흩뿌린다.
+  // 에너지가 쌍거리에만 의존하므로 완전 공면 배치에서는 평면 수직 방향 힘이 정확히 0 —
+  // 대칭 함정에 갇혀 완화가 영원히 평면을 못 벗어난다.
+  function scatterIfCoplanar(amp) {
+    if (atoms.length < 3) return false;
+    const zs = atoms.map((a) => a.p[2]);
+    if (Math.max(...zs) - Math.min(...zs) >= PLANE_TOL) return false;
+    atoms.forEach((a) => { a.p[2] += (Math.random() * 2 - 1) * amp; });
+    return true;
+  }
+
+  // --- 무작위 배치(3D): 뷰 중심 주변 구 안에 재배치, 최소 간격 확보 시도 ---
+  function randInSphere(c, rad) {
+    for (;;) {
+      const v = [Math.random()*2-1, Math.random()*2-1, Math.random()*2-1];
+      const n = Math.hypot(v[0], v[1], v[2]);
+      if (n > 1e-6 && n <= 1) return [c[0]+v[0]*rad, c[1]+v[1]*rad, c[2]+v[2]*rad];
+    }
+  }
+  function randomizePositions() {
+    if (!atoms.length) { setStatus("먼저 원소를 배치하세요."); return; }
+    stop();
+    const c = viewer.getTarget();
+    const placed = [];
+    for (const a of atoms) {
+      let best = null;
+      for (let t = 0; t < RAND_TRIES; t++) {
+        const q = randInSphere(c, RAND_RADIUS);
+        if (!best) best = q;
+        if (placed.every((o) => dist3(o, q) >= RAND_MIN_D)) { best = q; break; }
+      }
+      a.p = best; placed.push(best);
+    }
+    stepCount = 0; eHistory = [];
+    viewer.frameAll(); render(); updateHud();
+    setStatus("무작위 배치 완료 — 시작을 누르면 여기서 완화합니다.");
+  }
+
+  // --- 브라우저 로컬 추론: 힘 방향 최속강하 한 스텝 ---
+  function localStep() {
+    const numbers = atoms.map((a) => ELEMENTS[a.el].z);
+    const coords  = atoms.map((a) => a.p.slice());
+    const { energy, forces } = model.energyAndForces(numbers, coords);
+    const dims = (viewMode === "3d") ? 3 : 2;   // 2D 모드는 기존대로 xy 평면 안에서만 움직인다
+    let fmax = 0;
+    const next = coords.map((c, i) => {
+      const q = c.slice();
+      for (let d = 0; d < dims; d++) {
+        q[d] += clamp(STEP_LR * forces[i][d], -STEP_CLIP, STEP_CLIP);
+        fmax = Math.max(fmax, Math.abs(forces[i][d]));
+      }
+      return q;
+    });
+    return { next, energy, fmax };
+  }
+
+  // --- AWS 백엔드(/step) 경로 — 지금은 API_BASE="" 라 실행되지 않음(폴백만) ---
+  async function remoteStep() {
+    const body = {
+      atoms: atoms.map((a) => ({ element: a.el, x: a.p[0], y: a.p[1], z: a.p[2] })),
+      dt: 10.0,
+    };
+    const r = await fetch(API_BASE.replace(/\/$/, "") + "/step", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const j = await r.json();
+    return { next: j.atoms.map((p) => [p[0], p[1], p[2] || 0]), energy: j.energy, fmax: undefined };
+  }
+
+  async function computeStep() {
+    // AWS가 설정돼 있고 아직 실패로 확정되지 않았으면 원격을 시도, 실패 시 브라우저로 폴백.
+    if (API_BASE && remoteOK !== false) {
+      try {
+        const out = await remoteStep();
+        if (remoteOK !== true) { remoteOK = true; setBadge("live", "AWS 모델 /step"); }
+        return out;
+      } catch (e) {
+        remoteOK = false;
+        setBadge("err", "AWS 연결 실패 → 브라우저 모델로 전환");
+      }
+    }
+    return localStep();
+  }
+
+  async function tick() {
+    if (!running) return;
+    const { next, energy, fmax } = await computeStep();
+    atoms.forEach((a, i) => {
+      a.p = next[i];
+      if (viewMode === "2d") clampWorld2D(a.p);
+    });
+    stepCount++; render(); updateHud(energy, fmax);
+
+    // 수렴 판정: 최근 CONV_WIN 스텝 에너지 변동이 작으면 완화 완료
+    if (energy !== undefined) {
+      eHistory.push(energy);
+      if (eHistory.length > CONV_WIN) eHistory.shift();
+      if (eHistory.length === CONV_WIN) {
+        const lo = Math.min(...eHistory), hi = Math.max(...eHistory);
+        if (hi - lo < CONV_TOL) { stop(); setStatus("완화 완료 — 에너지 최소 구조 도달"); return; }
+      }
+    }
+    if (running) timer = setTimeout(tick, TICK);
+  }
+
+  function start() {
+    if (!model && !API_BASE) { setStatus("모델이 아직 로딩 중입니다."); return; }
+    if (atoms.length < 2) { setStatus("원소를 2개 이상 배치하세요."); return; }
+    if (viewMode === "3d" && scatterIfCoplanar(SCATTER_PLANE)) render();
+    running = true; stepCount = 0; eHistory = [];
+    document.getElementById("btnStart").disabled = true;
+    document.getElementById("btnStop").disabled = false;
+    setStatus("완화 중…");
+    tick();
+  }
+  function stop() {
+    running = false; clearTimeout(timer);
+    document.getElementById("btnStart").disabled = false;
+    document.getElementById("btnStop").disabled = true;
+  }
+  function clearAll() {
+    stop(); atoms.forEach((a) => a.dom.remove()); atoms = [];
+    stepCount = 0; eHistory = []; stage.classList.add("empty");
+    render(); updateHud(); setStatus("");
+  }
+
+  // --- 렌더: 2D는 DOM+SVG, 3D는 뷰어의 rAF 루프가 직접 그린다 ---
+  function render() { if (viewMode === "2d") render2D(); }
+  function render2D() {
+    for (const a of atoms) {
+      const s = worldToPx(a.p);
+      a.dom.style.left = s[0] + "px"; a.dom.style.top = s[1] + "px";
+    }
+    drawBonds();
+  }
+
+  // --- 결합선(거리 < BOND_MAX 인 쌍) ---
+  function drawBonds() {
+    const lines = [];
+    for (let i = 0; i < atoms.length; i++)
+      for (let j = i + 1; j < atoms.length; j++) {
+        if (dist3(atoms[i].p, atoms[j].p) >= BOND_MAX) continue;
+        const a = worldToPx(atoms[i].p), b = worldToPx(atoms[j].p);
+        lines.push(`<line x1="${a[0]}" y1="${a[1]}" x2="${b[0]}" y2="${b[1]}" stroke="#9aa1ad" stroke-width="3" stroke-linecap="round"/>`);
+      }
+    bondsSvg.innerHTML = lines.join("");
+  }
+
+  // --- HUD/상태 ---
+  function updateHud(energy, fmax) {
+    document.getElementById("hudStep").textContent = stepCount;
+    document.getElementById("hudN").textContent = atoms.length;
+    if (energy !== undefined) document.getElementById("hudEnergy").textContent = energy.toFixed(4) + " Ha";
+    if (fmax !== undefined) document.getElementById("hudForce").textContent = fmax.toFixed(4);
+  }
+  function setStatus(msg) { document.getElementById("statusMsg").textContent = msg; }
+  function setBadge(kind, label) {
+    const b = document.getElementById("modeBadge");
+    b.className = "badge " + kind;
+    b.textContent = kind === "live" ? "AWS 연결됨"
+                  : kind === "err"  ? (API_BASE ? "AWS 실패 → 브라우저" : "로드 실패")
+                  : kind === "load" ? "모델 로딩…"
+                  : "브라우저 모델 (nnp.pt)";
+    if (label !== undefined) setStatus(label);
+  }
+
+  modeSeg.addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-mode]");
+    if (b) setViewMode(b.dataset.mode);
+  });
+  btnRandom.addEventListener("click", randomizePositions);
+  document.getElementById("btnStart").addEventListener("click", start);
+  document.getElementById("btnStop").addEventListener("click", stop);
+  document.getElementById("btnClear").addEventListener("click", clearAll);
+</script>
+</body>
+</html>

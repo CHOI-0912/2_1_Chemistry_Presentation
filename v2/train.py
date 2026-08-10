@@ -1,4 +1,4 @@
-"""dataloader 사용 예시 — QM9x 일부로 SimpleNNP를 잠깐 학습시킨다.
+"""dataloader 사용 예시 — QM9x 일부로 SimpleModel을 잠깐 학습시킨다.
 
 성능을 내려는 스크립트가 아니라, dataloader가 내주는 (이름, 좌표, 원자번호, 에너지, 힘)을
 그대로 받아 모델에 먹이는 최소 예시다.
@@ -13,14 +13,13 @@ import torch
 import torch.nn as nn
 
 from dataloader import load_qm9x
-from model import SimpleNNP
+from model_Simple import SimpleModel
 
 N_MOL = 5000  # 데이터셋 전체(13만) 중 앞의 일부만
 EPOCHS = 5
 BATCH = 32
 LR = 1e-3
 HARTREE2KCAL = 627.5094740631
-
 
 def load_dataset(n_mol):
     """dataloader를 돌려 패딩된 배열로 쌓는다. 분자마다 원자 수가 달라 0으로 패딩."""
@@ -69,7 +68,7 @@ def main():
     perm = rng.permutation(len(E))
     val_idx, train_idx = perm[:500], perm[500:]
 
-    model = SimpleNNP()
+    model = SimpleModel(emb_dim=64, num_atom_whole=92, atten_heads=4, atten_dim=64, inner_dim=64, number_propo=2)
     print(f"파라미터 {sum(p.numel() for p in model.parameters())}개")
 
     opt = torch.optim.Adam(model.parameters(), lr=LR)
@@ -96,8 +95,8 @@ def main():
             flush=True,
         )
 
-    torch.save(model.state_dict(), "v2/nnp.pt")
-    print("v2/nnp.pt 저장")
+    torch.save(model.state_dict(), "v2/model_simple.pt")  # nnp.pt(구 SimpleNNP, 시뮬레이터용)와 분리
+    print("v2/model_simple.pt 저장")
 
 
 if __name__ == "__main__":

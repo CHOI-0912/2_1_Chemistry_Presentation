@@ -14,28 +14,24 @@
 | ANI-1x (wb97x_dz) | 4,956,005 | H C N O | ωB97x/6-31G(d) | total | O | Hartree |
 | ANI-1x (ccsd(t)_cbs) | 489,571 | H C N O | CCSD(T)/CBS | total | **X** | Hartree |
 | ANI-2x | 9,651,712 | H C N O **F S Cl** | ωB97X/6-31G(d) | total | O | Hartree |
-| QM9x | 133,885 | H C N O F | ωB97x/6-31G(d) | **atomization** | O | eV |
-| Transition1x | (데이터 없음) | H C N O | ωB97x/6-31G(d) | total | O | eV |
+| QM9x | 133,885 | H C N O F | ωB97x/6-31G(d) | total | O | eV |
+| Transition1x | 9,624,594 (경로) + 반응당 끝점 | H C N O | ωB97x/6-31G(d) | total | O | eV |
 
-## Transition1x 분석 — 이 저장소에는 실제 데이터가 없다
+## Transition1x — 실데이터 검증 완료
 
-`data/Transition1x/`에는 공식 저장소(코드·예제·setup.py)만 클론되어 있고 분자 데이터가 없다.
+실제 h5는 `data/Transition1x.h5` (6.6GB, figshare file 36035789)에 있다.
+공식 저장소 클론(`data/Transition1x/`) 안의 `transition1x.h5`(0바이트)와
+`data/t1x_splits.tar.gz`(10-fold 분할 인덱스 목록)는 분자 데이터가 아니니 혼동하지 말 것.
 
-- `data/Transition1x/transition1x.h5` — **0바이트**. 다운로드가 시작만 되고 끊긴 빈 파일이다.
-- `data/Transition1x/data/t1x_splits.tar.gz` (213MB) — 압축을 풀어도 **분자 데이터가 아니다.**
-  내용은 `splits/split_0..9/{train,val,test}_{idx,formulas}.json`, 즉 10-fold 교차검증용
-  **분할 인덱스 목록**뿐이다. 실제 좌표·에너지·힘은 여기에 들어 있지 않다.
-- 실제 h5는 figshare에서 받아야 한다: `python data/Transition1x/download_t1x.py data/Transition1x`
-  (`download_t1x.py`가 가리키는 URL: figshare file 36035789).
+스키마는 실측으로 확인했다: `f[split][formula][rxn]`에 경로 구조들
+(`positions`·`atomic_numbers`·`wB97x_6-31G(d).energy`·`.forces`, eV)이 있고, 그 아래
+`reactant`/`product`/`transition_state` 서브그룹이 끝점을 담는다. split별 경로 구조 수는
+data 9,624,594 / train 9,072,666 / val 269,186 / test 282,742 (반응 수는 data 기준 10,073개).
 
-그래서 `load_transition1x()`는 **공식 로더(`data/Transition1x/transition1x/dataloader.py`)와
-공식 README의 스펙에 맞춰 미리 구현만 해 두고**, 파일이 없거나 0바이트면 다운로드 방법을 담은
-`FileNotFoundError`를 던진다. 데이터를 받는 즉시 다른 로더와 똑같이 동작한다.
-
-**Trade-off:** 실데이터로 검증하지 못했다. 구조(`f[split][formula][rxn]` → `reactant`/`product`
-서브그룹 + 경로 상의 구조들, 키는 `positions`·`atomic_numbers`·`wB97x_6-31G(d).energy`·`.forces`)는
-공식 코드에서 읽어낸 것이므로 스키마가 바뀌지 않았다면 맞지만, 다른 로더들처럼 실제 shape·NaN 여부를
-눈으로 확인하지는 못했다. 데이터를 받으면 `python v2/dataloader.py` 스모크 테스트로 먼저 확인할 것.
+**Trade-off:** 로더는 반응마다 `reactant`/`product` 끝점과 경로 구조들을 내주지만
+`transition_state` 서브그룹은 따로 읽지 않는다. TS는 수렴한 NEB 경로의 최고 에너지 이미지라
+경로 쪽과 중복일 가능성이 높다고 봤기 때문인데, 실제 중복 여부는 확인하지 않았다.
+TS만 골라 쓰려면 서브그룹을 직접 읽을 것.
 
 내용상 Transition1x는 다른 셋과 성격이 다르다. ANI/QM9x가 **평형 근처 구조**를 샘플링한 데이터라면,
 Transition1x는 NEB로 얻은 **반응 경로 위의 구조**(반응물 → 전이상태 → 생성물)다. 전이상태처럼 결합이
@@ -51,22 +47,16 @@ ANI 계열은 Hartree, QM9x·Transition1x는 eV라 그대로 섞으면 27배 차
 - **잃은 것:** QM9x·Transition1x는 float 변환이 한 번 더 들어간다(부동소수점 오차는 무시할 수준).
   eV가 필요하면 `energy / EV2HARTREE`로 되돌리면 된다.
 
-## 에너지 기준이 데이터셋마다 다르다 (가장 큰 함정)
+## 에너지 기준 — 전부 총 에너지(total energy)로 통일
 
-**QM9x만 원자화 에너지(atomization energy)**를 반환한다. 공식 로더가 `energy - Σ(원자별 참조에너지)`로
-정의하고 사용자도 그것을 쓰기로 해서 그대로 따랐다. 나머지 셋은 **총 에너지(total energy)**다.
+네 데이터셋 모두 **총 에너지**를 반환한다. QM9x는 처음에 공식 로더의 `atomization_energy`
+(`energy - Σ(원자별 참조에너지)`)를 따랐다가, 다른 셋과 기준을 맞추기 위해 h5의 `energy` 키
+(총 에너지, eV)를 그대로 쓰는 것으로 바꿨다. 원자화 에너지가 필요하면 공식 로더의
+`REFERENCE_ENERGIES`(`data/qm9x/qm9x/dataloader.py`, eV)를 학습 코드에서 빼면 된다.
 
-즉 QM9x의 -1.5 Ha와 ANI-1x의 -386.9 Ha는 **같은 물리량이 아니다.** 두 데이터를 그냥 섞어 학습하면
-모델이 배우는 건 화학이 아니라 "어느 데이터셋에서 왔는가"가 된다.
-
-섞어 쓰려면 둘 중 하나로 맞춰야 한다:
-
-- 다른 셋도 원자화 에너지로 바꾼다 — 단, ANI/T1x의 참조 에너지는 각자의 이론 수준에서 계산한 고립 원자
-  에너지여야 한다. `REFERENCE_ENERGIES_EV`(H·C·N·O·F)는 QM9x/Transition1x용 값이라 ANI에 그대로 쓰면 안 된다.
-- 또는 데이터셋별 self-energy를 선형회귀로 뽑아 빼는 방식(NNP 학습에서 흔한 처리)을 쓴다.
-
-여기서는 로더 단계에서 임의로 통일하지 않고 **원 데이터셋의 정의를 보존**했다. 어떤 기준으로 맞출지는
-학습 코드가 결정할 문제이고, 잘못된 참조 에너지를 로더가 몰래 끼워 넣는 것보다 낫다고 봤다.
+**Trade-off:** 총 에너지는 분자 크기에 따라 수백 Ha 단위로 오프셋이 커서, 그대로 학습하면
+모델이 오프셋 맞추기에 용량을 쓴다. NNP 학습에서 흔히 하듯 데이터셋별 self-energy를
+선형회귀로 뽑아 빼는 전처리는 학습 코드의 몫이다. 로더는 원 데이터의 물리량을 보존한다.
 
 ## ANI-1x: wb97x_dz 채택, ccsd(t)는 별도 로더
 
@@ -108,6 +98,45 @@ conformer마다 문자열을 만드는 비용도 든다(대량 스트리밍 시 
 
 - **셔플·배치·패딩 없음.** 전부 순차 제너레이터다. 원자 수가 제각각이라 배치를 만들려면 패딩이나
   그래프 배칭이 필요한데, 모델 구조에 종속적이라 로더에 넣지 않았다.
-- **train/val/test 분할 없음.** Transition1x만 공식 분할(`t1x_splits.tar.gz`)이 있고 나머지는 없다.
-  Transition1x 로더는 `split=` 인자로 h5 내부 분할을 지원한다.
+- **train/val/test 분할 없음.** Transition1x만 공식 분할(h5 내부 train/val/test, 약 94:3:3)이 있고
+  나머지는 없다. Transition1x 로더는 `split=` 인자로 이를 지원한다. 나머지 셋의 조성 단위
+  90:5:5(±0.5%p) 분할은 `v2/splits.py`가 제공한다 — `python v2/splits.py`로 배정표(`splits.json`)를
+  만들고 `load_split()`으로 읽는다. T1x 공식 분할은 분자식 기준으로도 서로소라(실측 교집합 0),
+  배정표는 T1x의 분자식 171개를 공식 배정에 고정해 **다섯 소스 전부 교차 유출 없음**을 보장한다.
+  분할을 직접 만들 때의 함정은 아래 참고.
 - **numpy 반환, torch 텐서 아님.** 좌표는 데이터셋 원본 dtype(대개 float32) 그대로 준다.
+
+## 평가할 때의 함정 — 수치가 좋아 보여도 의심할 것
+
+학습 자체와는 별개로, "얼마나 정확한가"를 측정할 때 좋은 MAE 하나가 실제로는 아무것도
+증명하지 못하는 경우가 있다. 로더가 내주는 데이터의 성격에서 곧바로 따라 나오는 문제들이다.
+
+### 1. 분할 누수 (가장 흔한 착각)
+
+QM9x·ANI는 **같은 분자의 conformer(자세) 여러 개**로 이루어진다. QM9x는 `name`(분자)별 그룹 아래
+conformer들이, ANI도 그룹 아래 conformer들이 들어 있다. 그래서 conformer 단위로 **무작위 분할**하면
+train과 test에 *같은 분자의 다른 자세*가 나뉘어 들어가고, 모델은 그 분자를 이미 본 셈이 된다.
+이때 나오는 낮은 MAE는 **일반화가 아니라 암기**다.
+
+- 실제로 `v2/train.py`의 현재 분할(`rng.permutation(len(E))`로 conformer를 섞어 앞 500개를 val로)이
+  바로 이 누수에 해당한다. 데모용이라 문제 삼지 않았지만, 성능을 *보고*하려면 못 쓴다.
+- 엄밀히 하려면 **분자 이상의 단위로 통째로 분할**한다. `v2/splits.py`는 **조성(canonical Hill)**
+  단위로 나눈다. ANI-2x는 분자 식별자가 없어(위 "ANI-2x: 분자 이름이 없다" 참고) 분자 단위 분할이
+  불가능하지만, 조성은 분자보다 *굵은* 단위라 안전한 방향의 근사다: 같은 분자 ⇒ 같은 조성 ⇒ 같은
+  split이 보장되어 누수가 생길 수 없고, 이성질체까지 한 split에 묶이는 대가는 test가 "본 적 없는
+  조성"에 대한 평가가 된다는 것(오히려 더 엄격한 일반화 시험)뿐이다.
+
+### 2. 평균 MAE가 꼬리를 숨긴다
+
+평균 MAE는 좋은데 **드물지만 중요한 영역에서 파국적으로 틀릴 수 있다.** 전이상태처럼 결합이
+끊어지는 구조, 강하게 뒤틀린 구조가 그렇다. 스칼라 하나로 보고하지 말고 **오차 분포·최악값·영역별
+분해**를 본다. 특히 Transition1x의 **전이상태 근처 오차를 따로** 측정할 것 — 평형 구조만 잘 맞고
+전이상태에서 무너지는 모델은 반응을 다루지 못한다.
+
+### 3. 에너지 MAE ≠ 쓸모
+
+- **힘 MAE를 따로 본다.** MD·구조 완화를 굴리는 건 힘(`F = -∂E/∂r`)이다. 에너지 MAE는 좋은데
+  힘이 엉망일 수 있고, 그러면 완화가 엉뚱한 구조로 간다.
+- **상대 에너지(이성질체 순서)를 따로 검증한다.** 절대 에너지 MAE가 좋아도 이성질체 간 순서를
+  틀리면 화학적으로 실패다. `02_기존_방법론`의 HNCO/HOCN/HCNO/HONC 같은 [H,C,N,O] 이성질체의
+  상대 에너지 순서를 모델이 재현하는지가 절대 MAE보다 더 말해주는 지표다.
