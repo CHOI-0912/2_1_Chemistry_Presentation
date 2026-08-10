@@ -13,8 +13,8 @@ early_terminate: { type: hyperband, min_iter: 8 }
 parameters:
   lr:           { distribution: log_uniform_values, min: 2e-5, max: 1e-3 }
   batch:        { values: [32, 64, 128] }
-  atten_dim:    { values: [128, 256, 512] }
-  inner_dim:    { values: [128, 192, 256] }
+  atten_dim:    { values: [128, 256] }
+  inner_dim:    { values: [128, 192] }
   atten_heads:  { values: [4, 8, 16] }
   number_propo: { values: [1, 2, 4] }
   lambda_F:     { distribution: log_uniform_values, min: 0.3, max: 10 }
