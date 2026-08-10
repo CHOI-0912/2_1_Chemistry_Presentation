@@ -1,35 +1,43 @@
-"""W&B 스윕/단독 실행용 학습 스크립트 — QM9x, 조성 분할(splits.py) 기준.
+"""W&B 스윕/단독 학습 — 전처리된 5개 데이터셋(data/processed/*) 전부 사용.
 
-단독:  python v2/train_wandb.py [--lr 1e-3 --epochs 10 ...]
+먼저 `python v2/preprocess.py`로 전처리(ragged npy)가 되어 있어야 한다.
+processed에 없는 데이터셋은 건너뛴다(부분 전처리 상태에서도 동작).
+
+단독:  python v2/train_wandb.py [--lr 1e-3 --per_ds 40000 ...]
 스윕:  wandb sweep v2/sweep.yaml && wandb agent <sweep-id>
 로그인 없이 테스트: WANDB_MODE=offline
 
 프로젝트명: 2_1chemicstary.
-불가능 조합(배수/propo 제약)과 NaN 발산 런은 최악 점수(1e9)를 기록하고 즉시 종료해
-Bayes 탐색이 그 영역을 피하게 한다 (크래시로 죽이면 아무것도 못 배움).
+- per_ds: 데이터셋별 학습 샘플 상한(0=전부). 스윕은 서브샘플로 빠르게, 본학습은 0으로.
+- ani1x_ccsdt는 힘이 없어 힘 손실에서 자동 제외(샘플별 가중 0).
+- 불가능 조합·NaN 런은 최악 점수(1e9) 기록 후 즉시 종료 (Bayes가 피하게).
 """
 
 import argparse
+import json
 import os
 import sys
 import time
+from pathlib import Path
 
 import numpy as np
 import torch
 import wandb
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from model_Simple import SimpleModel
-from splits import load_split
+from model import SimpleModel
 
 HARTREE2KCAL = 627.5094740631
-WORST = 1e9  # 실패 런에 기록하는 최악 점수
+WORST = 1e9
+PROC = Path(__file__).resolve().parent.parent / "data" / "processed"
+DS_ALL = ["qm9x", "ani1x_wb97x", "ani1x_ccsdt", "ani2x", "transition1x"]
 
 DEFAULTS = dict(
     lr=1e-3, batch=64, epochs=10,
     atten_dim=64, inner_dim=64, atten_heads=4, number_propo=2,
     lambda_F=1.0,
-    n_train=50_000,  # Stage 1은 train 앞부분만. 0이면 전부
+    per_ds=40_000,      # 데이터셋별 train 샘플 상한 (0=전부)
+    val_per_ds=2_000,   # 데이터셋별 val 샘플 상한
     seed=0,
 )
 
@@ -41,49 +49,80 @@ def bail(reason):
     sys.exit(0)
 
 
-def load_padded(split, limit=0):
-    """load_split(qm9x)을 돌려 패딩 배열로 쌓는다. 최초 1회만 h5를 순회하고 npz 캐시."""
-    cache = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"cache_qm9x_{split}.npz")
-    if os.path.exists(cache):
-        d = np.load(cache)
-        Z, R, E, F = d["Z"], d["R"], d["E"], d["F"]
-    else:
-        samples = list(load_split("qm9x", split))
-        n_max = max(len(numbers) for _, _, numbers, _, _ in samples)
-        Z = np.zeros((len(samples), n_max), dtype=np.int64)
-        R = np.zeros((len(samples), n_max, 3), dtype=np.float32)
-        F = np.zeros((len(samples), n_max, 3), dtype=np.float32)
-        E = np.zeros(len(samples), dtype=np.float64)  # 총에너지(수백 Ha)는 float64 유지
-        for i, (_name, coords, numbers, energy, forces) in enumerate(samples):
-            n = len(numbers)
-            Z[i, :n] = numbers
-            R[i, :n] = coords
-            F[i, :n] = forces
-            E[i] = energy
-        np.savez_compressed(cache, Z=Z, R=R, E=E, F=F)
-        print(f"{split} 캐시 생성: {cache}", flush=True)
-    if limit and limit < len(E):
-        Z, R, E, F = Z[:limit], R[:limit], E[:limit], F[:limit]
-    return Z, R, E, F
+def open_split(ds, split):
+    d = PROC / ds / split
+    if not (d / "energy.npy").exists():
+        return None
+    return dict(
+        name=ds,
+        E=np.load(d / "energy.npy", mmap_mode="r"),
+        ptr=np.load(d / "ptr.npy"),
+        Z=np.load(d / "numbers.npy", mmap_mode="r"),
+        R=np.load(d / "coords.npy", mmap_mode="r"),
+        F=np.load(d / "forces.npy", mmap_mode="r") if (d / "forces.npy").exists() else None,
+    )
 
 
-def evaluate(model, Z, R, E, F, batch, device):
-    """val E MAE(kcal/mol), F MAE(kcal/mol/Å). 힘에 1차 미분이 필요해 no_grad는 못 쓴다."""
-    e_sum = f_sum = f_cnt = 0.0
-    for s in range(0, len(E), batch):
-        z = torch.from_numpy(Z[s:s + batch]).to(device)
-        r = torch.from_numpy(R[s:s + batch]).to(device)
-        e_pred, f_pred = model.energy_and_forces(z, r)
-        mask = (z > 0).float()
-        e_sum += np.abs(e_pred.detach().cpu().numpy() - E[s:s + batch]).sum()
-        f_sum += ((f_pred.detach().cpu() - torch.from_numpy(F[s:s + batch])).abs().sum(-1) * mask.cpu()).sum().item()
+def make_index(objs, per_ds, rng):
+    """(dataset_idx, mol_idx) 목록. per_ds>0이면 데이터셋별 무작위 서브샘플."""
+    idx = []
+    for di, o in enumerate(objs):
+        M = len(o["E"])
+        if 0 < per_ds < M:
+            sel = rng.choice(M, per_ds, replace=False)
+        else:
+            sel = np.arange(M)
+        idx.append(np.stack([np.full(len(sel), di), sel], axis=1))
+    return np.concatenate(idx)
+
+
+def collate(objs, items, device):
+    """ragged mmap → 배치 내 최대 원자 수로 패딩. fw=힘 타깃 보유 여부(샘플별)."""
+    B = len(items)
+    ns = [int(objs[di]["ptr"][mi + 1] - objs[di]["ptr"][mi]) for di, mi in items]
+    nmax = max(ns)
+    Z = np.zeros((B, nmax), np.int64)
+    R = np.zeros((B, nmax, 3), np.float32)
+    Ft = np.zeros((B, nmax, 3), np.float32)
+    fw = np.zeros(B, np.float32)
+    E = np.zeros(B, np.float64)
+    for b, ((di, mi), n) in enumerate(zip(items, ns)):
+        o = objs[di]
+        a = int(o["ptr"][mi])
+        Z[b, :n] = o["Z"][a:a + n]
+        R[b, :n] = o["R"][a:a + n]
+        E[b] = o["E"][mi]
+        if o["F"] is not None:
+            Ft[b, :n] = o["F"][a:a + n]
+            fw[b] = 1.0
+    return (torch.from_numpy(Z).to(device), torch.from_numpy(R).to(device),
+            torch.from_numpy(E).to(device), torch.from_numpy(Ft).to(device),
+            torch.from_numpy(fw).to(device))
+
+
+def evaluate(model, objs, index, batch, device):
+    """전체 + 데이터셋별 E MAE(kcal/mol), 힘 있는 샘플의 F MAE(kcal/mol/Å)."""
+    e_err = np.zeros(len(objs)); e_cnt = np.zeros(len(objs))
+    f_sum = f_cnt = 0.0
+    for s in range(0, len(index), batch):
+        items = index[s:s + batch]
+        z, r, e_t, f_t, fw = collate(objs, items, device)
+        e, f = model.energy_and_forces(z, r)
+        err = (e.detach() - e_t).abs().cpu().numpy()
+        for (di, _), v in zip(items, err):
+            e_err[di] += v; e_cnt[di] += 1
+        mask = (z > 0).float() * fw[:, None]
+        f_sum += ((f.detach() - f_t).abs().sum(-1) * mask).sum().item()
         f_cnt += mask.sum().item() * 3
-    return e_sum / len(E) * HARTREE2KCAL, f_sum / f_cnt * HARTREE2KCAL
+    per_ds = {objs[i]["name"]: e_err[i] / max(1, e_cnt[i]) * HARTREE2KCAL for i in range(len(objs))}
+    overall = e_err.sum() / max(1, e_cnt.sum()) * HARTREE2KCAL
+    f_mae = f_sum / max(1, f_cnt) * HARTREE2KCAL
+    return overall, f_mae, per_ds
 
 
 def main():
     if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8")  # Windows 콘솔(cp949)에서 Å 등 출력 보호
+        sys.stdout.reconfigure(encoding="utf-8")
     p = argparse.ArgumentParser()
     for k, v in DEFAULTS.items():
         p.add_argument(f"--{k}", type=type(v), default=v)
@@ -92,38 +131,37 @@ def main():
     run = wandb.init(project="2_1chemicstary", config=vars(args))
     c = wandb.config
 
-    # 불가능 조합 방어 — sweep.yaml 주석 참고
     if c.atten_dim % c.atten_heads or c.inner_dim % c.atten_heads or not (0 < c.number_propo < c.atten_heads):
         bail("불가능 조합 (배수/propo 제약)")
 
     torch.manual_seed(c.seed)
+    rng = np.random.default_rng(c.seed)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    Ztr, Rtr, Etr, Ftr = load_padded("train", c.n_train)
-    Zva, Rva, Eva, Fva = load_padded("val")
-    print(f"train {len(Etr)} / val {len(Eva)} / device {device}", flush=True)
+    tr_objs = [o for ds in DS_ALL if (o := open_split(ds, "train"))]
+    va_objs = [o for ds in DS_ALL if (o := open_split(ds, "val"))]
+    if not tr_objs:
+        bail(f"전처리 데이터 없음: {PROC} — python v2/preprocess.py 먼저")
+    tr_idx = make_index(tr_objs, c.per_ds, rng)
+    va_idx = make_index(va_objs, c.val_per_ds, rng)
+    print("train:", {o["name"]: min(len(o["E"]), c.per_ds or len(o["E"])) for o in tr_objs},
+          f"= {len(tr_idx):,} / val {len(va_idx):,} / device {device}", flush=True)
 
     model = SimpleModel(num_atom_whole=92, atten_heads=c.atten_heads, atten_dim=c.atten_dim,
                         inner_dim=c.inner_dim, number_propo=c.number_propo).to(device)
     wandb.summary["n_params"] = sum(p_.numel() for p_ in model.parameters())
     opt = torch.optim.Adam(model.parameters(), lr=c.lr)
-    rng = np.random.default_rng(c.seed)
 
     best = float("inf")
     for epoch in range(1, c.epochs + 1):
         t0 = time.time()
-        perm = rng.permutation(len(Etr))
-        for s in range(0, len(perm), c.batch):
-            idx = perm[s:s + c.batch]
-            z = torch.from_numpy(Ztr[idx]).to(device)
-            r = torch.from_numpy(Rtr[idx]).to(device)
-            e_t = torch.from_numpy(Etr[idx]).to(device)
-            f_t = torch.from_numpy(Ftr[idx]).to(device)
-
+        order = rng.permutation(len(tr_idx))
+        for s in range(0, len(order), c.batch):
+            z, r, e_t, f_t, fw = collate(tr_objs, tr_idx[order[s:s + c.batch]], device)
             e, f = model.energy_and_forces(z, r, create_graph=True)
-            mask = (z > 0).float()[..., None]
+            wm = (z > 0).float()[..., None] * fw[:, None, None]  # 힘 없는 샘플(ccsdt)은 0
             loss_e = ((e - e_t) ** 2).mean()
-            loss_f = (((f - f_t) * mask) ** 2).sum() / mask.sum() / 3
+            loss_f = (((f - f_t) * wm) ** 2).sum() / wm.sum().clamp(min=1.0) / 3
             loss = loss_e + c.lambda_F * loss_f
             if not torch.isfinite(loss):
                 bail(f"NaN/Inf loss (epoch {epoch}, step {s // c.batch})")
@@ -131,17 +169,16 @@ def main():
             loss.backward()
             opt.step()
 
-        e_mae, f_mae = evaluate(model, Zva, Rva, Eva, Fva, c.batch, device)
+        e_mae, f_mae, per_ds = evaluate(model, va_objs, va_idx, c.batch, device)
         if not (np.isfinite(e_mae) and np.isfinite(f_mae)):
             bail(f"NaN 평가 (epoch {epoch})")
-        wandb.log({
-            "epoch": epoch,
-            "val/E_MAE_kcal": e_mae, "val/F_MAE_kcal": f_mae,
-            "train/loss": loss.item(), "train/loss_E": loss_e.item(), "train/loss_F": loss_f.item(),
-            "perf/sec_per_epoch": time.time() - t0,
-        })
-        print(f"epoch {epoch}/{c.epochs}  val E MAE {e_mae:8.2f} kcal/mol  F MAE {f_mae:7.2f} kcal/mol/Å"
-              f"  ({time.time() - t0:.0f}s)", flush=True)
+        wandb.log({"epoch": epoch, "val/E_MAE_kcal": e_mae, "val/F_MAE_kcal": f_mae,
+                   **{f"val/E_MAE_{k}": v for k, v in per_ds.items()},
+                   "train/loss": loss.item(), "train/loss_E": loss_e.item(),
+                   "train/loss_F": loss_f.item(), "perf/sec_per_epoch": time.time() - t0})
+        print(f"epoch {epoch}/{c.epochs}  val E MAE {e_mae:8.2f}  F MAE {f_mae:7.2f} kcal/mol(/Å)  "
+              + " ".join(f"{k}={v:.1f}" for k, v in per_ds.items())
+              + f"  ({time.time() - t0:.0f}s)", flush=True)
         if e_mae < best:
             best = e_mae
             torch.save(model.state_dict(), os.path.join(run.dir, "best.pt"))

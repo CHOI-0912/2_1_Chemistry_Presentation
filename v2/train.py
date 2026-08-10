@@ -13,7 +13,7 @@ import torch
 import torch.nn as nn
 
 from dataloader import load_qm9x
-from model_Simple import SimpleModel
+from model import SimpleModel
 
 N_MOL = 5000  # 데이터셋 전체(13만) 중 앞의 일부만
 EPOCHS = 5
