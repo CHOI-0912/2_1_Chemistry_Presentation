@@ -68,7 +68,7 @@ def main():
     perm = rng.permutation(len(E))
     val_idx, train_idx = perm[:500], perm[500:]
 
-    model = SimpleModel(emb_dim=64, num_atom_whole=92, atten_heads=4, atten_dim=64, inner_dim=64, number_propo=2)
+    model = SimpleModel(num_atom_whole=92, atten_heads=4, atten_dim=64, inner_dim=64, number_propo=2)
     print(f"파라미터 {sum(p.numel() for p in model.parameters())}개")
 
     opt = torch.optim.Adam(model.parameters(), lr=LR)

@@ -2,11 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import constants as con
-import math
-from torch.nn.attention.flex_attention import flex_attention, create_block_mask
+from torch.nn.attention.flex_attention import flex_attention
 from einops import rearrange
-
-MAX_Z = 10  # H(1) ~ F(9), 0은 패딩
 
 class SwiGLUFFN(nn.Module):
     def __init__(self, dim, hidden_dim):
@@ -19,13 +16,12 @@ class SwiGLUFFN(nn.Module):
         return self.w_down(F.silu(self.w_gate(x)) * self.w_up(x))
 
 class SimpleModel(nn.Module):
-    def __init__(self, emb_dim, num_atom_whole, atten_heads, atten_dim, inner_dim, number_propo):
+    def __init__(self, num_atom_whole, atten_heads, atten_dim, inner_dim, number_propo):
         '''
         Simple 한 형태의 에너지 예측 모델
 
         HF 방식에서 양성자간 에너지는 물리적으로 계산
         num_atom: 현재 배치의 원자 갯수
-        emb_dim: 임베딩 차원
         atten_dim: 어텐션 차원 (atten_heads 의 배수)
         inner_dim: 내부 차원 (atten_heads 의 배수)
         num_atom_whole: 원자 번호의 최댓값(현재 배치가 아닌 고려해야할 총 원자 번호)
@@ -34,17 +30,17 @@ class SimpleModel(nn.Module):
         super().__init__()
         assert atten_dim % atten_heads == 0, "atten_dim은 atten_heads의 배수여야 함"
         assert inner_dim % atten_heads == 0, "inner_dim은 atten_heads의 배수여야 함"
-        assert 0 < number_propo < atten_heads, "number_propo는 1 이상 atten_heads 미만 (나머지 head가 임베딩 Q/K 담당)"
+        assert 0 < number_propo < atten_heads, "number_propo는 1 이상 atten_heads 미만 (나머지 head가 임베딩 담당)"
         #attention 2x2해서 4개
-        self.atten_dim = atten_dim
         self.atten_heads = atten_heads
         self.number_propo = number_propo
         self.head_qk_dim = atten_dim // atten_heads #head당 QK 차원
         self.head_v_dim = inner_dim // atten_heads #head당 V 차원
         self.log_self_distance = nn.Parameter(torch.tensor(0.0)) # log(1.0) = 0 # 자기 자신 attention의 learnable bias, 어떤 실수든 유효
 
+        # 비례 head 몫만 선형으로 만든다. QK는 Q/K로 chunk하니 ×2, V는 ×2 불필요하고 차원 기준도 head_v_dim
         self.A1_WQK = nn.Linear(1, number_propo*self.head_qk_dim*2, dtype=torch.float32)
-        self.A1_WV = nn.Linear(1, inner_dim, dtype=torch.float32)
+        self.A1_WV = nn.Linear(1, number_propo*self.head_v_dim, dtype=torch.float32)
         self.A1_SwiGLUFFN = SwiGLUFFN(inner_dim, inner_dim*4)
 
         self.A2_WQK = nn.Linear(inner_dim, atten_dim*2, dtype=torch.float32)
@@ -57,8 +53,10 @@ class SimpleModel(nn.Module):
 
         self.energy_head = nn.Linear(inner_dim, 1) # 원자별 에너지 기여 -> 합산
 
+        # 비비례 head 몫은 임베딩. Q/K는 atten_dim 기준, V는 inner_dim 기준으로 남은 차원을 채움
         self.embq = nn.Embedding(num_atom_whole+1, atten_dim-number_propo*self.head_qk_dim)
         self.embk = nn.Embedding(num_atom_whole+1, atten_dim-number_propo*self.head_qk_dim)
+        self.embv = nn.Embedding(num_atom_whole+1, inner_dim-number_propo*self.head_v_dim)
 
         # 고립원자 총에너지 테이블 (Hartree). 매 forward마다 tensor 만들면 낭비(GPU면 매번 복사)라 버퍼로 1회 등록
         # 값이 수천 Ha라 float32(유효 ~7자리)면 원자당 ~1e-4 Ha가 뭉개짐 -> float64 유지
@@ -85,9 +83,9 @@ class SimpleModel(nn.Module):
         mask = torch.triu(torch.ones(T, T, dtype=torch.bool, device=rel_distances.device), diagonal=1) # (N, N) #하삼각 의미 없음 (중복 계산)
 
         # mask에서 rel_distances의 원래 대각성분이 0이라 추후 나누기에서 문제가 생김. eye로 대각성분을 1로 넣은거
-        rel_sq_inverse = ((1/rel_distances.masked_fill(eye, 1.0)).masked_fill(~mask, 0)) # (B, N, N) # 대각 + 하삼각으로 서로 다른 쌍 중복없이 고려
+        rel_inverse = ((1/rel_distances.masked_fill(eye, 1.0)).masked_fill(~mask, 0)) # (B, N, N) # 대각 + 하삼각으로 서로 다른 쌍 중복없이 고려
 
-        coefficients = numbers_matrix * rel_sq_inverse # (B, N, N) -> (B, N) # 쿨롱 퍼텐셜의 달라지는 부분 (계수)
+        coefficients = numbers_matrix * rel_inverse # (B, N, N) -> (B, N) # 쿨롱 퍼텐셜의 달라지는 부분 (계수)
         E = coefficients.sum(-1).sum(-1) * con.E2_OVER_4PI_EPS0_HARTREE_ANG # (B, )
         return E # (B, )
 
@@ -152,15 +150,19 @@ class SimpleModel(nn.Module):
             blocked = padding[b, kv_idx] & (q_idx != kv_idx)
             return torch.where(blocked, float("-inf"), score - log_inv_distance[b, q_idx, kv_idx])
 
-        # 비례 head: 원자번호 스칼라의 선형변환. A1_WQK 출력이 number_propo개 head 분량뿐이라 H=number_propo로 나눠야 함
+        # 비례 head: 원자번호 스칼라의 선형변환. 출력이 number_propo개 head 분량뿐이라 H=number_propo로 나눠야 함
         qk = rearrange(self.A1_WQK(numbers.float().unsqueeze(-1)), "B N (H D) -> B H N D", H=self.number_propo) # (B, number_propo, N, head_qk_dim*2)
-        v = rearrange(self.A1_WV(numbers.float().unsqueeze(-1)), "B N (H D) -> B H N D", H=self.atten_heads) # (B, H, N, head_v_dim)
+        v_propo = rearrange(self.A1_WV(numbers.float().unsqueeze(-1)), "B N (H D) -> B H N D", H=self.number_propo) # (B, number_propo, N, head_v_dim)
         q_propo, k_propo = qk.chunk(2, dim=-1) # 각 (B, number_propo, N, head_qk_dim)
-        # 비비례 head: 임베딩이 Q/K 담당. 이쪽도 head 모양으로 쪼갬
-        q_non_propo = rearrange(self.embq(numbers), "B N (H D) -> B H N D", H=self.atten_heads-self.number_propo) # (B, H-number_propo, N, head_qk_dim)
-        k_non_propo = rearrange(self.embk(numbers), "B N (H D) -> B H N D", H=self.atten_heads-self.number_propo)
+        # 비비례 head: 임베딩이 Q/K/V 담당. 같은 head 모양으로 쪼갬
+        H_non = self.atten_heads - self.number_propo
+        q_non_propo = rearrange(self.embq(numbers), "B N (H D) -> B H N D", H=H_non) # (B, H_non, N, head_qk_dim)
+        k_non_propo = rearrange(self.embk(numbers), "B N (H D) -> B H N D", H=H_non)
+        v_non_propo = rearrange(self.embv(numbers), "B N (H D) -> B H N D", H=H_non) # (B, H_non, N, head_v_dim)
         # 결합은 feature 축이 아니라 head 축(dim=1) — head마다 역할이 다르다는 설계이므로
-        q, k = torch.cat([q_propo, q_non_propo], dim=1), torch.cat([k_propo, k_non_propo], dim=1) # (B, atten_heads, N, head_qk_dim)
+        q = torch.cat([q_propo, q_non_propo], dim=1) # (B, atten_heads, N, head_qk_dim)
+        k = torch.cat([k_propo, k_non_propo], dim=1)
+        v = torch.cat([v_propo, v_non_propo], dim=1) # (B, atten_heads, N, head_v_dim)
         out = flex_attention(q, k, v, score_mod=score_mod) # (B, H, N, head_v_dim)
         out = rearrange(out, "B H N D -> B N (H D)") # (B, N, inner_dim)
         out = self.A1_SwiGLUFFN(out)
