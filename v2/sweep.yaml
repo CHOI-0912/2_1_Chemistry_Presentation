@@ -1,17 +1,20 @@
-# W&B 하이퍼파라미터 스윕 (SimpleModel, QM9x train split 기준)
+# W&B 하이퍼파라미터 스윕 v2 — 1차 스윕(zioho1fl, 완주 4런) 결과로 범위 축소 (2026-08-11)
+#   근거: lr 1.2e-4~1.8e-4 런들이 1e-6대를 압도(73/76 vs 90/91 kcal) → lr을 그 주변 2자릿수로.
+#   atten/inner 64는 상위권에 없음 → 제외. heads=12는 atten_dim 후보와 배수가 안 맞아 전부
+#   bail이었음 → 제외(1차 수율 20%의 주범 하나). lambda_F는 신호가 약해 완만히 축소.
 # 실행: wandb sweep v2/sweep.yaml && wandb agent <sweep-id>
 #
-# 불가능 조합(나눗셈·propo 제약 위반)은 train_wandb.py가 최악 점수(1e9)를 기록하고
-# 즉시 종료해 Bayes가 그 영역을 피하게 한다. NaN 발산 런도 동일 처리.
+# 불가능 조합(number_propo>=heads 등)과 NaN 발산 런은 train_wandb.py가 최악 점수(1e9)를
+# 기록하고 즉시 종료해 Bayes가 그 영역을 피하게 한다.
 program: v2/train_wandb.py
 method: bayes
 metric: { name: val/E_MAE_kcal, goal: minimize }
 early_terminate: { type: hyperband, min_iter: 8 }
 parameters:
-  lr:           { distribution: log_uniform_values, min: 1e-6, max: 0.1 }
+  lr:           { distribution: log_uniform_values, min: 2e-5, max: 1e-3 }
   batch:        { values: [32, 64, 128] }
-  atten_dim:    { values: [64, 128, 256, 512] }
-  inner_dim:    { values: [64, 128, 192, 256] }
-  atten_heads:  { values: [4, 8, 12, 16] }
+  atten_dim:    { values: [128, 256, 512] }
+  inner_dim:    { values: [128, 192, 256] }
+  atten_heads:  { values: [4, 8, 16] }
   number_propo: { values: [1, 2, 4] }
-  lambda_F:     { distribution: log_uniform_values, min: 0.1, max: 100 }
+  lambda_F:     { distribution: log_uniform_values, min: 0.3, max: 10 }

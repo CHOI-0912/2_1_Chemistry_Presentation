@@ -44,7 +44,10 @@ DEFAULTS = dict(
 
 def bail(reason):
     print("BAIL:", reason, flush=True)
-    wandb.log({"val/E_MAE_kcal": WORST, "val/F_MAE_kcal": WORST})
+    # 데이터셋별 키에도 같이 기록 — 전체 패널에만 1e9가 찍히면 스윕 워크스페이스에서
+    # "전체는 치솟는데 데이터셋별은 멀쩡"한 착시를 만든다 (2026-08-10 실사례)
+    wandb.log({"val/E_MAE_kcal": WORST, "val/F_MAE_kcal": WORST,
+               **{f"val/E_MAE_{ds}": WORST for ds in DS_ALL}})
     wandb.finish()
     sys.exit(0)
 
