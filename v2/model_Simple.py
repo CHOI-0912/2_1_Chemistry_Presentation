@@ -142,6 +142,7 @@ class SimpleModel(nn.Module):
 
         #A1 # 원자번호가 일부 의미를 가짐 + 거리 분수함수 가중 attention
 
+        #Attention
         # flex_attention을 안 쓰는 이유(2026-08-10 실측): flex_attention_backward의 2차 미분이 미구현이라
         # 힘 손실(create_graph=True) 학습이 CUDA에서도 불가, CPU는 1차 backward부터 미지원.
         # 아래 수동 구현은 flex + score_mod와 수학적으로 동일 (기본 스케일 1/sqrt(head_qk_dim) 포함).

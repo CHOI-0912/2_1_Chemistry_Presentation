@@ -31,3 +31,5 @@ data/ANI1x_datasets/
 data/ANI2x/
 data/qm9x/
 data/Transition1x/
+v2/cache_*.npz
+wandb/
