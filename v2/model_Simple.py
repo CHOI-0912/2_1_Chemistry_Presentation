@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import constants as con
-from torch.nn.attention.flex_attention import flex_attention
 from einops import rearrange
 
 class SwiGLUFFN(nn.Module):
@@ -143,12 +142,17 @@ class SimpleModel(nn.Module):
 
         #A1 # 원자번호가 일부 의미를 가짐 + 거리 분수함수 가중 attention
 
-        def score_mod(score, b, h, q_idx, kv_idx):
-            # score: 스칼라 score (q_idx번째 query와 kv_idx번째 key의 내적)
-            # b: batch index, h: head index
-            # 패딩 key는 차단하되 자기 자신은 남김 (전부 -inf면 softmax가 NaN)
-            blocked = padding[b, kv_idx] & (q_idx != kv_idx)
-            return torch.where(blocked, float("-inf"), score - log_inv_distance[b, q_idx, kv_idx])
+        # flex_attention을 안 쓰는 이유(2026-08-10 실측): flex_attention_backward의 2차 미분이 미구현이라
+        # 힘 손실(create_graph=True) 학습이 CUDA에서도 불가, CPU는 1차 backward부터 미지원.
+        # 아래 수동 구현은 flex + score_mod와 수학적으로 동일 (기본 스케일 1/sqrt(head_qk_dim) 포함).
+        scale = self.head_qk_dim ** -0.5
+        blocked = padding[:, None, None, :] & ~eye[None, None, :, :] # (B,1,N,N) # 패딩 key 차단, 자기 자신은 남김 (전부 -inf면 softmax가 NaN)
+        bias = log_inv_distance[:, None, :, :] # (B,1,N,N) # score에서 log(거리)를 빼면 = 가중치를 거리로 나누는 것
+
+        def attend(q, k, v):
+            scores = torch.einsum("bhqd,bhkd->bhqk", q, k) * scale - bias # (B,H,N,N)
+            scores = scores.masked_fill(blocked, float("-inf"))
+            return torch.einsum("bhqk,bhkd->bhqd", scores.softmax(-1), v) # (B,H,N,head_v_dim)
 
         # 비례 head: 원자번호 스칼라의 선형변환. 출력이 number_propo개 head 분량뿐이라 H=number_propo로 나눠야 함
         qk = rearrange(self.A1_WQK(numbers.float().unsqueeze(-1)), "B N (H D) -> B H N D", H=self.number_propo) # (B, number_propo, N, head_qk_dim*2)
@@ -163,7 +167,7 @@ class SimpleModel(nn.Module):
         q = torch.cat([q_propo, q_non_propo], dim=1) # (B, atten_heads, N, head_qk_dim)
         k = torch.cat([k_propo, k_non_propo], dim=1)
         v = torch.cat([v_propo, v_non_propo], dim=1) # (B, atten_heads, N, head_v_dim)
-        out = flex_attention(q, k, v, score_mod=score_mod) # (B, H, N, head_v_dim)
+        out = attend(q, k, v) # (B, H, N, head_v_dim)
         out = rearrange(out, "B H N D -> B N (H D)") # (B, N, inner_dim)
         out = self.A1_SwiGLUFFN(out)
 
@@ -171,14 +175,14 @@ class SimpleModel(nn.Module):
         qk = rearrange(self.A2_WQK(out), "B N (H D) -> B H N D", H=self.atten_heads) # (B, H, N, head_qk_dim*2)
         v = rearrange(self.A2_WV(out), "B N (H D) -> B H N D", H=self.atten_heads) # (B, H, N, head_v_dim)
         q, k = qk.chunk(2, dim=-1) # 각 (B, H, N, head_qk_dim)
-        out = flex_attention(q, k, v, score_mod=score_mod) # (B, H, N, head_v_dim)
+        out = attend(q, k, v) # (B, H, N, head_v_dim)
         out = rearrange(out, "B H N D -> B N (H D)") # (B, N, inner_dim)
         out = self.A2_SwiGLUFFN(out)
 
         qk = rearrange(self.A3_WQK(out), "B N (H D) -> B H N D", H=self.atten_heads) # (B, H, N, head_qk_dim*2)
         v = rearrange(self.A3_WV(out), "B N (H D) -> B H N D", H=self.atten_heads) # (B, H, N, head_v_dim)
         q, k = qk.chunk(2, dim=-1) # 각 (B, H, N, head_qk_dim)
-        out = flex_attention(q, k, v, score_mod=score_mod) # (B, H, N, head_v_dim)
+        out = attend(q, k, v) # (B, H, N, head_v_dim)
         out = rearrange(out, "B H N D -> B N (H D)") # (B, N, inner_dim)
         out = self.A3_SwiGLUFFN(out)
 
