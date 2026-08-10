@@ -4,7 +4,7 @@
 스윕:  wandb sweep v2/sweep.yaml && wandb agent <sweep-id>
 로그인 없이 테스트: WANDB_MODE=offline
 
-프로젝트명: 2_1chemical.
+프로젝트명: 2_1chemicstary.
 불가능 조합(배수/propo 제약)과 NaN 발산 런은 최악 점수(1e9)를 기록하고 즉시 종료해
 Bayes 탐색이 그 영역을 피하게 한다 (크래시로 죽이면 아무것도 못 배움).
 """
@@ -89,7 +89,7 @@ def main():
         p.add_argument(f"--{k}", type=type(v), default=v)
     args, _ = p.parse_known_args()
 
-    run = wandb.init(project="2_1chemical", config=vars(args))
+    run = wandb.init(project="2_1chemicstary", config=vars(args))
     c = wandb.config
 
     # 불가능 조합 방어 — sweep.yaml 주석 참고
