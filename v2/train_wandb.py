@@ -15,6 +15,7 @@ processed에 없는 데이터셋은 건너뛴다(부분 전처리 상태에서�
 
 import argparse
 import json
+import math
 import os
 import sys
 import time
@@ -36,6 +37,7 @@ DEFAULTS = dict(
     lr=1e-3, batch=64, epochs=10,
     atten_dim=64, inner_dim=64, atten_heads=4, number_propo=2,
     lambda_F=1.0,
+    clip=1.0,           # 기울기 노름 클리핑 (0=끄기)
     per_ds=40_000,      # 데이터셋별 train 샘플 상한 (0=전부)
     val_per_ds=2_000,   # 데이터셋별 val 샘플 상한
     seed=0,
@@ -155,6 +157,20 @@ def main():
     wandb.summary["n_params"] = sum(p_.numel() for p_ in model.parameters())
     opt = torch.optim.Adam(model.parameters(), lr=c.lr)
 
+    # lr 스케줄: 1에포크 동안 0→lr 선형 워밍업, 이후 남은 에포크에 걸쳐 코사인 감쇠
+    # (고정 lr이 후반 발산의 공범이었다 — 2026-08-11 fulltrain에서 ani2x 110→7,648 kcal/mol)
+    steps_per_epoch = math.ceil(len(tr_idx) / c.batch)
+    warmup_steps = steps_per_epoch
+    total_steps = steps_per_epoch * c.epochs
+
+    def lr_scale(step):
+        if step < warmup_steps:
+            return (step + 1) / warmup_steps
+        prog = (step - warmup_steps) / max(1, total_steps - warmup_steps)
+        return 0.5 * (1.0 + math.cos(math.pi * min(prog, 1.0)))
+
+    sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_scale)
+
     best = float("inf")
     for epoch in range(1, c.epochs + 1):
         t0 = time.time()
@@ -170,7 +186,10 @@ def main():
                 bail(f"NaN/Inf loss (epoch {epoch}, step {s // c.batch})")
             opt.zero_grad()
             loss.backward()
+            # 클리핑: S2·CCl4 같은 소수의 극단 샘플이 배치 기울기를 지배하는 것을 막는다
+            gnorm = torch.nn.utils.clip_grad_norm_(model.parameters(), c.clip) if c.clip else None
             opt.step()
+            sched.step()
 
         e_mae, f_mae, per_ds = evaluate(model, va_objs, va_idx, c.batch, device)
         if not (np.isfinite(e_mae) and np.isfinite(f_mae)):
@@ -178,7 +197,9 @@ def main():
         wandb.log({"epoch": epoch, "val/E_MAE_kcal": e_mae, "val/F_MAE_kcal": f_mae,
                    **{f"val/E_MAE_{k}": v for k, v in per_ds.items()},
                    "train/loss": loss.item(), "train/loss_E": loss_e.item(),
-                   "train/loss_F": loss_f.item(), "perf/sec_per_epoch": time.time() - t0})
+                   "train/loss_F": loss_f.item(), "train/lr": sched.get_last_lr()[0],
+                   **({"train/grad_norm": float(gnorm)} if gnorm is not None else {}),
+                   "perf/sec_per_epoch": time.time() - t0})
         print(f"epoch {epoch}/{c.epochs}  val E MAE {e_mae:8.2f}  F MAE {f_mae:7.2f} kcal/mol(/Å)  "
               + " ".join(f"{k}={v:.1f}" for k, v in per_ds.items())
               + f"  ({time.time() - t0:.0f}s)", flush=True)
