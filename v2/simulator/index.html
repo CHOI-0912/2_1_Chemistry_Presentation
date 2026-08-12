@@ -104,7 +104,7 @@
   }
   .seg button:hover{color:var(--blue)}
   .seg button.on{background:var(--blue); color:#fff}
-  .hud{display:flex; gap:18px; font-family:var(--mono); font-size:13px; color:var(--ink); margin-left:auto}
+  .hud{display:flex; flex-wrap:wrap; gap:6px 16px; font-family:var(--mono); font-size:13px; color:var(--ink); margin-left:auto}
   .hud b{color:var(--blue)}
   .status{font-size:12px; color:var(--soft)}
   .status .badge{font-family:var(--mono); padding:2px 8px; border-radius:999px; font-size:11px; font-weight:700}
@@ -120,8 +120,9 @@
     <h1>분자 완화 시뮬레이터</h1>
     <a href="../../">← 발표(PPT)로</a>
   </header>
-  <p class="sub">원소를 캔버스에 배치하고 <b>시작</b>을 누르면, 학습된 신경망 퍼텐셜(<span style="font-family:var(--mono)">v2/nnp.pt</span>)이
-  매 스텝 힘 <span style="font-family:var(--mono)">F = −∂E/∂r</span>을 계산해 분자를 에너지 최소 구조로 완화합니다. <b>브라우저에서 직접</b> 추론합니다.</p>
+  <p class="sub">원소를 캔버스에 배치하고 <b>시작</b>을 누르면, 전 데이터셋으로 학습한 신경망 퍼텐셜(<span style="font-family:var(--mono)">v2/fulltrain_best.pt</span>, 80만 파라미터)이
+  매 스텝 힘 <span style="font-family:var(--mono)">F = −∂E/∂r</span>을 계산해 분자를 에너지 최소 구조로 완화합니다. <b>브라우저에서 직접</b> 추론합니다.
+  에너지는 <b>총에너지</b>(고립원자 에너지 합 + 신경망이 예측한 결합 몫)라 물이면 −76 Ha 근처입니다 — 완화로 달라지는 폭은 <span style="font-family:var(--mono)">ΔE</span>를 보세요.</p>
 
   <main>
     <!-- 왼쪽: 팔레트 + 프리셋 -->
@@ -129,6 +130,7 @@
       <h2>원소 팔레트</h2>
       <div class="palette" id="palette"></div>
       <p class="hint">칩을 캔버스로 <b>드래그</b>하거나, 칩을 클릭해 선택한 뒤 캔버스를 클릭해 배치하세요. 시작 전에는 원자를 드래그로 옮길 수 있습니다.</p>
+      <p class="hint">모델은 <b>H·C·N·O·F</b>만 지원합니다(S·Cl은 학습은 됐지만 결합이 붕괴해 제외).</p>
       <p class="hint"><b>3D 모드</b>: 빈 공간 드래그=회전, 휠=줌. 원자 위 드래그=이동. 완화 중에도 돌려 볼 수 있습니다.
       3D 전환 시 평면 배치는 살짝 흩뿌려집니다(완전 공면이면 평면 수직 방향 힘이 0이라 평면을 못 벗어남).</p>
       <h2 style="margin-top:16px">예시 분자</h2>
@@ -149,16 +151,18 @@
         <button class="act btn-clear" id="btnClear">비우기</button>
         <div class="hud">
           <span>step <b id="hudStep">0</b></span>
-          <span>energy <b id="hudEnergy">–</b></span>
+          <span>E <b id="hudEnergy">–</b></span>
+          <span>ΔE <b id="hudDelta">–</b></span>
           <span>|F|max <b id="hudForce">–</b></span>
           <span>atoms <b id="hudN">0</b></span>
+          <span>ms/step <b id="hudMs">–</b></span>
         </div>
       </div>
       <div class="status">추론: <span class="badge load" id="modeBadge">모델 로딩…</span> <span id="statusMsg"></span></div>
     </section>
   </main>
 
-<script src="nnp.js"></script>
+<script src="simple_nnp.js"></script>
 <script src="view3d.js"></script>
 <script>
   // ===================================================================
@@ -171,11 +175,16 @@
   const API_BASE = "";     // 예: "http://<ec2-ip>:8000" — 지금은 미구현이라 비워 둠
 
   const SCALE = 45;        // px per Å (2D 화면 ↔ 모델 좌표)
-  const TICK  = 60;        // 스텝 간격(ms)
+  const TICK  = 40;        // 스텝 간격(ms) — 추론 자체가 20~60 ms라 실제 주기는 그만큼 더 길다
   const R     = 20;        // 원자 반경(px, 2D 경계 클램프)
-  const STEP_LR   = 1.5;   // 최속강하 학습률 (Å per Ha/Å)
-  const STEP_CLIP = 0.04;  // 스텝당 최대 이동(Å) — 발산 방지
+  // 완화 상수는 fulltrain_best.pt 기준으로 다시 잡았다(구모델 값은 1.5 / 0.04).
+  // 이 모델은 단거리 반발벽이 없어(model.py 주석 참고) 큰 스텝을 쓰면 원자가 서로 뚫고 들어가
+  // 0.2~0.7 Å로 붕괴한다. LR·CLIP을 4배 줄이면 CH₄가 정확한 정사면체(C–H 1.06 Å, |F|→0)로 안착.
+  const STEP_LR   = 0.3;   // 최속강하 학습률 (Å per Ha/Å)
+  const STEP_CLIP = 0.01;  // 스텝당 최대 이동(Å) — 발산·붕괴 방지
   const CONV_WIN  = 16;    // 에너지 평탄 판정 창(스텝)
+  // 총에너지는 수십~수백 Ha지만 완화로 실제 변하는 폭(ΔE)은 0.005~0.07 Ha라 절대 허용치는 여전히 이 규모.
+  // 스텝당 에너지 요동 ≈ |F|max × STEP_CLIP 이라 CLIP을 줄인 덕에 이 값에서 전 프리셋이 23~74스텝에 수렴.
   const CONV_TOL  = 3e-4;  // 창 내 에너지 변동이 이보다 작으면 완화 완료로 간주(Ha)
   const BOND_MAX  = 1.8;   // 결합선 판정 거리(Å) — 2D/3D 공통, 화학 판정이 아니라 시각 표시
 
@@ -188,7 +197,8 @@
   const RAND_TRIES    = 60;   // 최소 거리 만족 재시도 횟수
 
   // CPK 색상 + 원자번호
-  // 지원 원소 = 모델이 학습한 QM9x 5종(H·C·N·O·F). 임베딩 MAX_Z=10 이라 그 외 원소는 넣을 수 없음.
+  // 학습 데이터(QM9x + ANI-2x)에는 S·Cl도 있지만 팔레트에는 넣지 않았다 — 실측 결과 C–Cl/C–S 결합에
+  // 반발벽이 전혀 없어 완화하면 C–Cl 0.24 Å, S–C 0.81 Å로 붕괴한다(H₂S 하나만 정상). README 참고.
   const ELEMENTS = {
     H: {c:"#e9e9ee", t:"#333333", z:1},
     C: {c:"#33363b", t:"#ffffff", z:6},
@@ -196,12 +206,14 @@
     O: {c:"#ff2d2d", t:"#ffffff", z:8},
     F: {c:"#90e050", t:"#20340a", z:9},
   };
+  // [원소, x, y, z] Å. 실제 분자 구조에서 결합만 약 15% 늘려 놓은 시작점(완화가 눈에 보이게).
+  // 예전처럼 2D 대충 배치(원자끼리 0.5 Å로 겹치는 등)로 시작하면 이 모델은 붕괴한 구조로 수렴한다.
   const PRESETS = {
-    "H₂O (물)":     [["O",0,0],["H",0.96,0.3],["H",-0.4,0.9]],
-    "NH₃ (암모니아)":[["N",0,0],["H",1.0,0.1],["H",-0.5,0.9],["H",-0.5,-0.9]],
-    "CH₄ (메테인)": [["C",0,0],["H",1.0,0.0],["H",-0.5,0.9],["H",-0.5,-0.9],["H",0.0,-1.0]],
-    "HCN (사이안화수소)":[["H",-1.3,0.2],["C",-0.1,-0.1],["N",1.1,0.1]],
-    "CH₂F₂ (다이플루오로메테인)":[["C",0,0],["F",1.1,0.5],["F",-1.1,0.5],["H",0.6,-0.9],["H",-0.6,-0.9]],
+    "H₂O (물)":     [["O",0,0,0],["H",0.87,0.68,0],["H",-0.87,0.68,0]],
+    "NH₃ (암모니아)":[["N",0,0,0.14],["H",1.08,0,-0.24],["H",-0.54,0.94,-0.24],["H",-0.54,-0.94,-0.24]],
+    "CH₄ (메테인)": [["C",0,0,0],["H",0.72,0.72,0.72],["H",-0.72,-0.72,0.72],["H",0.72,-0.72,-0.72],["H",-0.72,0.72,-0.72]],
+    "HCN (사이안화수소)":[["H",-1.23,0.08,0],["C",0,0,0],["N",1.33,-0.05,0]],
+    "CH₂F₂ (다이플루오로메테인)":[["C",0,0,0],["F",0.90,0.90,0.90],["F",-0.90,-0.90,0.90],["H",0.72,-0.72,-0.72],["H",-0.72,0.72,-0.72]],
   };
 
   const stage    = document.getElementById("stage");
@@ -217,18 +229,17 @@
   let selectedEl = null;
   let viewMode = "2d";   // "2d" | "3d"
   let running = false, stepCount = 0, timer = null;
-  let model = null, eHistory = [];
+  let model = null, eHistory = [], eStart = null;
   let remoteOK = null;   // null=미시도, true/false=AWS 연결 결과
 
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
   const dist3 = (a, b) => Math.hypot(a[0]-b[0], a[1]-b[1], a[2]-b[2]);
 
-  // --- 모델 로드 ---
-  fetch("weights.json")
-    .then((r) => { if (!r.ok) throw new Error("weights.json " + r.status); return r.json(); })
-    .then((w) => {
-      model = new NNP.SimpleNNP(w);
-      setBadge("demo", "브라우저에서 nnp.pt 추론 준비 완료");
+  // --- 모델 로드 (weights_simple.json 매니페스트 + weights_simple.bin float32 블롭, 3.2 MB) ---
+  SimpleNNP.SimpleModel.load()
+    .then((m) => {
+      model = m;
+      setBadge("demo", "브라우저에서 fulltrain_best.pt 추론 준비 완료");
     })
     .catch((e) => setBadge("err", "모델 로드 실패: " + e.message + " (정적 서버로 여세요)"));
 
@@ -274,7 +285,7 @@
   }
   function loadPreset(spec) {
     clearAll();
-    for (const [el, ax, ay] of spec) addAtom(el, [ax, ay, 0]);
+    for (const [el, ax, ay, az] of spec) addAtom(el, [ax, ay, az || 0]);
     if (viewMode === "3d") { scatterIfCoplanar(SCATTER_PLANE); viewer.frameAll(); }
   }
 
@@ -397,7 +408,7 @@
       }
       a.p = best; placed.push(best);
     }
-    stepCount = 0; eHistory = [];
+    stepCount = 0; eHistory = []; eStart = null;
     viewer.frameAll(); render(); updateHud();
     setStatus("무작위 배치 완료 — 시작을 누르면 여기서 완화합니다.");
   }
@@ -451,12 +462,14 @@
 
   async function tick() {
     if (!running) return;
+    const t0 = performance.now();
     const { next, energy, fmax } = await computeStep();
+    const ms = performance.now() - t0;
     atoms.forEach((a, i) => {
       a.p = next[i];
       if (viewMode === "2d") clampWorld2D(a.p);
     });
-    stepCount++; render(); updateHud(energy, fmax);
+    stepCount++; render(); updateHud(energy, fmax, ms);
 
     // 수렴 판정: 최근 CONV_WIN 스텝 에너지 변동이 작으면 완화 완료
     if (energy !== undefined) {
@@ -474,7 +487,7 @@
     if (!model && !API_BASE) { setStatus("모델이 아직 로딩 중입니다."); return; }
     if (atoms.length < 2) { setStatus("원소를 2개 이상 배치하세요."); return; }
     if (viewMode === "3d" && scatterIfCoplanar(SCATTER_PLANE)) render();
-    running = true; stepCount = 0; eHistory = [];
+    running = true; stepCount = 0; eHistory = []; eStart = null;
     document.getElementById("btnStart").disabled = true;
     document.getElementById("btnStop").disabled = false;
     setStatus("완화 중…");
@@ -487,7 +500,7 @@
   }
   function clearAll() {
     stop(); atoms.forEach((a) => a.dom.remove()); atoms = [];
-    stepCount = 0; eHistory = []; stage.classList.add("empty");
+    stepCount = 0; eHistory = []; eStart = null; stage.classList.add("empty");
     render(); updateHud(); setStatus("");
   }
 
@@ -514,11 +527,18 @@
   }
 
   // --- HUD/상태 ---
-  function updateHud(energy, fmax) {
+  // 총에너지는 −76 Ha처럼 자릿수가 크고 완화로 변하는 폭은 1e-3 Ha 수준이라 ΔE를 따로 보여준다.
+  function updateHud(energy, fmax, ms) {
     document.getElementById("hudStep").textContent = stepCount;
     document.getElementById("hudN").textContent = atoms.length;
-    if (energy !== undefined) document.getElementById("hudEnergy").textContent = energy.toFixed(4) + " Ha";
+    if (energy !== undefined) {
+      if (eStart === null) eStart = energy;
+      document.getElementById("hudEnergy").textContent = energy.toFixed(4) + " Ha";
+      const d = energy - eStart;
+      document.getElementById("hudDelta").textContent = (d >= 0 ? "+" : "") + d.toFixed(4);
+    }
     if (fmax !== undefined) document.getElementById("hudForce").textContent = fmax.toFixed(4);
+    if (ms !== undefined) document.getElementById("hudMs").textContent = ms.toFixed(0);
   }
   function setStatus(msg) { document.getElementById("statusMsg").textContent = msg; }
   function setBadge(kind, label) {
@@ -527,7 +547,7 @@
     b.textContent = kind === "live" ? "AWS 연결됨"
                   : kind === "err"  ? (API_BASE ? "AWS 실패 → 브라우저" : "로드 실패")
                   : kind === "load" ? "모델 로딩…"
-                  : "브라우저 모델 (nnp.pt)";
+                  : "브라우저 모델 (fulltrain_best.pt)";
     if (label !== undefined) setStatus(label);
   }
 
