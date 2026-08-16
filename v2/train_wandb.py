@@ -1,7 +1,8 @@
-"""W&B 스윕/단독 학습 — 전처리된 5개 데이터셋(data/processed/*) 전부 사용.
+"""W&B 스윕/단독 학습 — 전처리된 데이터셋(data/processed/*) 사용. --datasets로 선택.
 
 먼저 `python v2/preprocess.py`로 전처리(ragged npy)가 되어 있어야 한다.
 processed에 없는 데이터셋은 건너뛴다(부분 전처리 상태에서도 동작).
+기본 데이터셋은 ani1x_ccsdt 제외 4종 — DEFAULTS의 datasets 주석 참고.
 
 단독:  python v2/train_wandb.py [--lr 1e-3 --per_ds 40000 ...]
 스윕:  wandb sweep v2/sweep.yaml && wandb agent <sweep-id>
@@ -41,6 +42,10 @@ DEFAULTS = dict(
     per_ds=40_000,      # 데이터셋별 train 샘플 상한 (0=전부)
     val_per_ds=2_000,   # 데이터셋별 val 샘플 상한
     seed=0,
+    # 사용할 데이터셋 (쉼표 구분). 기본값에서 ani1x_ccsdt 제외 (2026-08-13 결정):
+    # ccsdt는 wb97x와 같은 좌표에 다른 이론수준(CCSD(T)) 라벨이 붙은 모순 타깃이라
+    # (격차 평균 +0.316 Ha, 실측) 혼합 학습에서 MAE 바닥(~127 kcal/mol)을 만들었다.
+    datasets="qm9x,ani1x_wb97x,ani2x,transition1x",
 )
 
 
@@ -143,8 +148,12 @@ def main():
     rng = np.random.default_rng(c.seed)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    tr_objs = [o for ds in DS_ALL if (o := open_split(ds, "train"))]
-    va_objs = [o for ds in DS_ALL if (o := open_split(ds, "val"))]
+    use_ds = [d.strip() for d in c.datasets.split(",") if d.strip()]
+    bad = [d for d in use_ds if d not in DS_ALL]
+    if bad:
+        bail(f"알 수 없는 데이터셋 {bad} (가능: {DS_ALL})")
+    tr_objs = [o for ds in use_ds if (o := open_split(ds, "train"))]
+    va_objs = [o for ds in use_ds if (o := open_split(ds, "val"))]
     if not tr_objs:
         bail(f"전처리 데이터 없음: {PROC} — python v2/preprocess.py 먼저")
     tr_idx = make_index(tr_objs, c.per_ds, rng)
