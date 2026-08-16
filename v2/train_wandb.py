@@ -160,6 +160,9 @@ def main():
     torch.manual_seed(c.seed)
     rng = np.random.default_rng(c.seed)
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    # TF32(암페어+ 행렬곱 가속): 실측 -20% (A10G, 2026-08-17 벤치). torch.compile은 2차 미분
+    # 미지원으로 탈락, 버킷 배칭은 TF32 이후 병목이 아니라(커널 오버헤드 지배) 효과 없음.
+    torch.set_float32_matmul_precision("high")
 
     use_ds = [d.strip() for d in c.datasets.split(",") if d.strip()]
     bad = [d for d in use_ds if d not in DS_ALL]
@@ -177,7 +180,7 @@ def main():
     model = SimpleModel(num_atom_whole=92, atten_heads=c.atten_heads, atten_dim=c.atten_dim,
                         inner_dim=c.inner_dim, number_propo=c.number_propo, ref=c.ref).to(device)
     wandb.summary["n_params"] = sum(p_.numel() for p_ in model.parameters())
-    opt = torch.optim.Adam(model.parameters(), lr=c.lr)
+    opt = torch.optim.Adam(model.parameters(), lr=c.lr, fused=(device == "cuda"))
 
     # lr 스케줄: 1에포크 동안 0→lr 선형 워밍업, 이후 남은 에포크에 걸쳐 코사인 감쇠
     # (고정 lr이 후반 발산의 공범이었다 — 2026-08-11 fulltrain에서 ani2x 110→7,648 kcal/mol)
