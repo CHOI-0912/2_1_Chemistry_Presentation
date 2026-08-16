@@ -37,7 +37,7 @@ DS_ALL = ["qm9x", "ani1x_wb97x", "ani1x_ccsdt", "ani2x", "transition1x"]
 DEFAULTS = dict(
     lr=1e-3, batch=64, epochs=10,
     atten_dim=64, inner_dim=64, atten_heads=4, number_propo=2,
-    lambda_F=1.0,
+    lambda_F=100.0,     # MACE 계열 기본값(E:F = 1:100). per-atom 손실로 바꾸며 재조정(2026-08-13)
     clip=1.0,           # 기울기 노름 클리핑 (0=끄기)
     per_ds=40_000,      # 데이터셋별 train 샘플 상한 (0=전부)
     val_per_ds=2_000,   # 데이터셋별 val 샘플 상한
@@ -110,24 +110,36 @@ def collate(objs, items, device):
             torch.from_numpy(fw).to(device))
 
 
+HARTREE2MEV = 27211.386245988
+
+
 def evaluate(model, objs, index, batch, device):
-    """전체 + 데이터셋별 E MAE(kcal/mol), 힘 있는 샘플의 F MAE(kcal/mol/Å)."""
+    """전체 + 데이터셋별 E MAE(kcal/mol), F MAE(kcal/mol/Å, 성분별),
+    그리고 SOTA 비교용 원자당 지표(meV/atom, meV/Å)."""
     e_err = np.zeros(len(objs)); e_cnt = np.zeros(len(objs))
+    ea_sum = 0.0  # Σ |ΔE|/N  (원자당 에너지 오차)
     f_sum = f_cnt = 0.0
     for s in range(0, len(index), batch):
         items = index[s:s + batch]
         z, r, e_t, f_t, fw = collate(objs, items, device)
         e, f = model.energy_and_forces(z, r)
-        err = (e.detach() - e_t).abs().cpu().numpy()
+        err = (e.detach() - e_t).abs()
+        natoms = (z > 0).sum(dim=1).clamp(min=1)
+        ea_sum += (err / natoms).sum().item()
+        err = err.cpu().numpy()
         for (di, _), v in zip(items, err):
             e_err[di] += v; e_cnt[di] += 1
         mask = (z > 0).float() * fw[:, None]
         f_sum += ((f.detach() - f_t).abs().sum(-1) * mask).sum().item()
         f_cnt += mask.sum().item() * 3
+    n = max(1, e_cnt.sum())
     per_ds = {objs[i]["name"]: e_err[i] / max(1, e_cnt[i]) * HARTREE2KCAL for i in range(len(objs))}
-    overall = e_err.sum() / max(1, e_cnt.sum()) * HARTREE2KCAL
+    overall = e_err.sum() / n * HARTREE2KCAL
     f_mae = f_sum / max(1, f_cnt) * HARTREE2KCAL
-    return overall, f_mae, per_ds
+    # SOTA 논문 단위: 에너지 meV/atom(MAE), 힘 meV/Å(성분별 MAE)
+    e_mev_atom = ea_sum / n * HARTREE2MEV
+    f_mev_ang = f_sum / max(1, f_cnt) * HARTREE2MEV
+    return overall, f_mae, per_ds, e_mev_atom, f_mev_ang
 
 
 def main():
@@ -188,7 +200,11 @@ def main():
             z, r, e_t, f_t, fw = collate(tr_objs, tr_idx[order[s:s + c.batch]], device)
             e, f = model.energy_and_forces(z, r, create_graph=True)
             wm = (z > 0).float()[..., None] * fw[:, None, None]  # 힘 없는 샘플(ccsdt)은 0
-            loss_e = ((e - e_t) ** 2).mean()
+            # MACE식 손실(2026-08-13 전환): 에너지를 원자 수로 나눠 제곱 — 큰 분자가 손실을
+            # 지배하는 것(예제: 60원자 분자가 물의 400배)을 없애고, √loss_e가 곧 원자당
+            # RMSE(Ha/atom)라 SOTA 성적표 단위(meV/atom)와 바로 이어진다.
+            natoms = (z > 0).sum(dim=1).clamp(min=1)
+            loss_e = (((e - e_t) / natoms) ** 2).mean()
             loss_f = (((f - f_t) * wm) ** 2).sum() / wm.sum().clamp(min=1.0) / 3
             loss = loss_e + c.lambda_F * loss_f
             if not torch.isfinite(loss):
@@ -200,16 +216,18 @@ def main():
             opt.step()
             sched.step()
 
-        e_mae, f_mae, per_ds = evaluate(model, va_objs, va_idx, c.batch, device)
+        e_mae, f_mae, per_ds, e_mev_atom, f_mev_ang = evaluate(model, va_objs, va_idx, c.batch, device)
         if not (np.isfinite(e_mae) and np.isfinite(f_mae)):
             bail(f"NaN 평가 (epoch {epoch})")
         wandb.log({"epoch": epoch, "val/E_MAE_kcal": e_mae, "val/F_MAE_kcal": f_mae,
+                   "val/E_MAE_meV_atom": e_mev_atom, "val/F_MAE_meV_A": f_mev_ang,
                    **{f"val/E_MAE_{k}": v for k, v in per_ds.items()},
                    "train/loss": loss.item(), "train/loss_E": loss_e.item(),
                    "train/loss_F": loss_f.item(), "train/lr": sched.get_last_lr()[0],
                    **({"train/grad_norm": float(gnorm)} if gnorm is not None else {}),
                    "perf/sec_per_epoch": time.time() - t0})
         print(f"epoch {epoch}/{c.epochs}  val E MAE {e_mae:8.2f}  F MAE {f_mae:7.2f} kcal/mol(/Å)  "
+              f"[{e_mev_atom:.1f} meV/atom, {f_mev_ang:.1f} meV/Å]  "
               + " ".join(f"{k}={v:.1f}" for k, v in per_ds.items())
               + f"  ({time.time() - t0:.0f}s)", flush=True)
         if e_mae < best:
