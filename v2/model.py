@@ -15,7 +15,7 @@ class SwiGLUFFN(nn.Module):
         return self.w_down(F.silu(self.w_gate(x)) * self.w_up(x))
 
 class SimpleModel(nn.Module):
-    def __init__(self, num_atom_whole, atten_heads, atten_dim, inner_dim, number_propo):
+    def __init__(self, num_atom_whole, atten_heads, atten_dim, inner_dim, number_propo, ref="fit"):
         '''
         Simple 한 형태의 에너지 예측 모델
 
@@ -25,6 +25,7 @@ class SimpleModel(nn.Module):
         inner_dim: 내부 차원 (atten_heads 의 배수)
         num_atom_whole: 원자 번호의 최댓값(현재 배치가 아닌 고려해야할 총 원자 번호)
         number_propo: 처음 Attention에서 몇개의 head가 원자번호에 비례하는 것을 처리할지
+        ref: 고립원자 몫 기준표 — "fit"(데이터 최소제곱 적합, 기본) | "nist"(NIST LSD 고립원자)
         '''
         super().__init__()
         assert atten_dim % atten_heads == 0, "atten_dim은 atten_heads의 배수여야 함"
@@ -59,7 +60,9 @@ class SimpleModel(nn.Module):
 
         # 고립원자 총에너지 테이블 (Hartree). 매 forward마다 tensor 만들면 낭비(GPU면 매번 복사)라 버퍼로 1회 등록
         # 값이 수천 Ha라 float32(유효 ~7자리)면 원자당 ~1e-4 Ha가 뭉개짐 -> float64 유지
-        self.register_buffer("Etot_table", torch.tensor(con.Etot, dtype=torch.float64)) # Etot_table[0] = 0 (패딩)
+        assert ref in ("fit", "nist"), "ref는 'fit' 또는 'nist'"
+        table = con.Etot if ref == "fit" else con.Etot_nist
+        self.register_buffer("Etot_table", torch.tensor(table, dtype=torch.float64)) # Etot_table[0] = 0 (패딩)
 
     def to_RCS(self, x): #Relative Coordinate System
         '''

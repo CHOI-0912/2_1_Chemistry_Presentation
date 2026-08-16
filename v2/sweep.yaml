@@ -6,6 +6,8 @@
 #
 # 불가능 조합(number_propo>=heads 등)과 NaN 발산 런은 train_wandb.py가 최악 점수(1e9)를
 # 기록하고 즉시 종료해 Bayes가 그 영역을 피하게 한다.
+# lambda_F는 스윕하지 않는다(2026-08-13): MACE 표준 1:100 고정. 스윕 지표가 에너지 MAE뿐이라
+# λ_F를 탐색 축에 두면 힘을 희생해 에너지만 맞추는 쪽으로 최적화가 게임됨.
 program: v2/train_wandb.py
 method: bayes
 metric: { name: val/E_MAE_kcal, goal: minimize }
@@ -17,4 +19,4 @@ parameters:
   inner_dim:    { values: [128, 192] }
   atten_heads:  { values: [4, 8, 16] }
   number_propo: { values: [1, 2, 4] }
-  lambda_F:     { distribution: log_uniform_values, min: 0.3, max: 10 }
+  ref:          { values: ["fit", "nist"] }  # 기준 에너지 A/B: 최소제곱 vs 고립원자(NIST LSD)

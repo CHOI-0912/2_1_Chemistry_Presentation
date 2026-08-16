@@ -46,6 +46,7 @@ DEFAULTS = dict(
     # ccsdt는 wb97x와 같은 좌표에 다른 이론수준(CCSD(T)) 라벨이 붙은 모순 타깃이라
     # (격차 평균 +0.316 Ha, 실측) 혼합 학습에서 MAE 바닥(~127 kcal/mol)을 만들었다.
     datasets="qm9x,ani1x_wb97x,ani2x,transition1x",
+    ref="fit",          # 고립원자 몫 기준: "fit"(최소제곱) | "nist"(NIST LSD 고립원자) — 스윕 A/B 축
 )
 
 
@@ -174,7 +175,7 @@ def main():
           f"= {len(tr_idx):,} / val {len(va_idx):,} / device {device}", flush=True)
 
     model = SimpleModel(num_atom_whole=92, atten_heads=c.atten_heads, atten_dim=c.atten_dim,
-                        inner_dim=c.inner_dim, number_propo=c.number_propo).to(device)
+                        inner_dim=c.inner_dim, number_propo=c.number_propo, ref=c.ref).to(device)
     wandb.summary["n_params"] = sum(p_.numel() for p_ in model.parameters())
     opt = torch.optim.Adam(model.parameters(), lr=c.lr)
 
